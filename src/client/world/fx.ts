@@ -218,7 +218,7 @@ export class Fx {
   /** Compile every effect's shader up front so the first shot does not hitch. */
   warm(renderer: THREE.WebGLRenderer, camera: THREE.Camera) {
     for (const s of this.sprites) s.s.visible = true;
-    renderer.compile(this.scene, camera);
+    renderer.compile(this.group, camera, this.scene);
     for (const s of this.sprites) s.s.visible = false;
   }
 

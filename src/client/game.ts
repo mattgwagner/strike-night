@@ -328,7 +328,7 @@ export class Game {
     const g = this.corpse.group;
     g.rotation.order = 'YXZ';
     g.position.set(...this.deathPos);
-    g.rotation.y = this.deathYaw + Math.PI;
+    g.rotation.y = this.deathYaw;
     this.scene.add(g);
   }
 
@@ -354,7 +354,7 @@ export class Game {
     if (this.corpse) {
       const k = Math.min(1, t / 380);
       const g = this.corpse.group;
-      g.rotation.x = -(k * k * Math.PI / 2 - (t > 380 ? Math.sin(Math.min(1, (t - 380) / 260) * Math.PI) * 0.12 : 0));
+      g.rotation.x = (k * k * Math.PI / 2 - (t > 380 ? Math.sin(Math.min(1, (t - 380) / 260) * Math.PI) * 0.12 : 0));
       g.position.y = this.deathPos[1] + 0.1 * k;
     }
     const c: Vec3 = [this.deathPos[0], this.deathPos[1] + 0.5, this.deathPos[2]];

@@ -30,7 +30,7 @@ export class RemotePlayer {
   private flashT = -1; private flashK = 0;
   private stepDist = 0;
   private lastP: Vec3;
-  private mats: Array<{ m: THREE.Material & { opacity: number; transparent: boolean }; emissive?: THREE.Color; base?: THREE.Color; baseOpacity: number }> = [];
+  private mats: Array<{ m: THREE.Material & { opacity: number; transparent: boolean }; emissive?: THREE.Color; base?: THREE.Color; baseOpacity: number; baseTransparent: boolean }> = [];
   private faded = false;
   private legs: THREE.Object3D[] = [];
   private muzzleLocal = new THREE.Vector3(0, 0, 0.6);
@@ -53,7 +53,7 @@ export class RemotePlayer {
       if (!m || seen.has(m) || o === this.tag) return;
       seen.add(m);
       const em = (m as THREE.MeshStandardMaterial).emissive;
-      this.mats.push({ m: m as any, emissive: em, base: em?.clone(), baseOpacity: (m as any).opacity ?? 1 });
+      this.mats.push({ m: m as any, emissive: em, base: em?.clone(), baseOpacity: (m as any).opacity ?? 1, baseTransparent: !!(m as any).transparent });
     });
     // optional leg rig if the skin exposes it
     for (const n of ['legL', 'legR']) { const o = this.rig.group.getObjectByName(n); if (o) this.legs.push(o); }
@@ -118,7 +118,7 @@ export class RemotePlayer {
       let ang: number;
       if (t < FALL_MS) { const k = t / FALL_MS; ang = k * k * (Math.PI / 2); }
       else { const k = Math.min(1, (t - FALL_MS) / 260); ang = Math.PI / 2 - Math.sin(k * Math.PI) * 0.16 * (1 - k * 0.5); }
-      g.rotation.x = -ang;
+      g.rotation.x = ang; // +x tips the top toward +Z = backward for a -Z-facing rig
       g.position.y = this.p[1] + 0.1 * Math.min(1, t / FALL_MS);
       if (t > FADE_FROM) this.setOpacity(Math.max(0, 1 - (t - FADE_FROM) / FADE_MS));
       if (t > FADE_FROM + FADE_MS) g.visible = false;
@@ -127,12 +127,12 @@ export class RemotePlayer {
     if (!this.alive) { g.visible = false; return; }
     g.visible = true;
     g.position.set(this.p[0], this.p[1], this.p[2]);
-    // skins face +Z; yaw 0 looks down -Z, so turn them around
-    g.rotation.y = this.yaw + Math.PI;
+    // skins.ts turns the model inside the rig so rotation.y = yaw faces forward(yaw)
+    g.rotation.y = this.yaw;
     // flinch: snap back then recover
     let fl = 0;
     if (this.flinchT >= 0) { const k = (now - this.flinchT) / 220; if (k >= 1) this.flinchT = -1; else fl = Math.sin(Math.min(1, k) * Math.PI) * (1 - k) * 0.25 * this.flinchK; }
-    g.rotation.x = -fl;
+    g.rotation.x = fl;
     this.rig.head.rotation.x = -this.pitch * 0.8 - fl * 1.5;
     this.rig.gun.rotation.x = -this.pitch;
     this.rig.setCrouch(this.crouch);
@@ -175,7 +175,8 @@ export class RemotePlayer {
     const want = o < 1;
     if (want === this.faded && !want) return;
     for (const e of this.mats) {
-      if (e.m.transparent !== want) { e.m.transparent = want; e.m.needsUpdate = true; }
+      const tr = want || e.baseTransparent;
+      if (e.m.transparent !== tr) { e.m.transparent = tr; e.m.needsUpdate = true; }
       e.m.opacity = want ? e.baseOpacity * o : e.baseOpacity;
     }
     this.faded = want;
