@@ -224,7 +224,8 @@ function mountPreview(canvas: HTMLCanvasElement, getSkin: () => string): () => v
       rig = buildSkin(current);
       scene.add(rig.group);
     }
-    rig.group.rotation.y = -0.35 + t * 0.00028;
+    // Skins face -Z. Turn them toward the camera (+Z) and drift so the gun stays in frame.
+    rig.group.rotation.y = Math.PI - 0.45 + Math.sin(t * 0.00045) * 0.4;
     rig.group.position.y = Math.sin(t * 0.0012) * 0.02;
     renderer.render(scene, camera);
   };
