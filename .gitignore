@@ -5,3 +5,4 @@ dist
 *.log
 .DS_Store
 e2e/out
+e2e/out-fx
