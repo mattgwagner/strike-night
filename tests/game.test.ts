@@ -1,0 +1,133 @@
+import { describe, expect, it } from 'vitest';
+import { Game } from '../src/worker/game';
+import { MATCH, PLAYER, WEAPONS } from '../src/shared/constants';
+import type { Vec3 } from '../src/shared/protocol';
+
+function twoPlayers(now = 1000) {
+  const g = new Game('arcade', now);
+  const a = g.join('Alice', 'bot', now);
+  const b = g.join('Bob', 'bear', now);
+  if ('error' in a || 'error' in b) throw new Error('join failed');
+  // 10m apart on open floor along the west wall, nothing between them
+  a.player.p = [-26, 0, 0]; b.player.p = [-16, 0, 0];
+  return { g, a: a.player, b: b.player };
+}
+
+function shotAt(g: Game, from: number, to: { id: number; p: Vec3 }, part: 'head' | 'body', now: number, w: 'rifle' | 'sniper' | 'knife' = 'rifle') {
+  const s = g.players.get(from)!;
+  const o: Vec3 = [s.p[0], s.p[1] + PLAYER.eyeHeight, s.p[2]];
+  const y = part === 'head' ? PLAYER.height - 0.1 : 0.9;
+  const point: Vec3 = [to.p[0], to.p[1] + y, to.p[2]];
+  const d: Vec3 = [point[0] - o[0], point[1] - o[1], point[2] - o[2]];
+  return g.handle(from, { t: 'shoot', w, o, d, hits: [{ id: to.id, part, point }] }, now);
+}
+
+describe('Game', () => {
+  it('welcomes the joiner and announces to everyone', () => {
+    const { a } = twoPlayers();
+    expect(a.id).toBe(1);
+    const g = new Game();
+    const r = g.join('<script>Eve', 'ghost', 0);
+    expect('player' in r && r.player.name).toBe('scriptEve');
+    expect('out' in r && r.out.map(o => o.msg.t)).toEqual(['welcome', 'join']);
+  });
+
+  it('body shot does base damage, headshot multiplies, kill awards score', () => {
+    const { g, b } = twoPlayers();
+    let out = shotAt(g, 1, b, 'body', 2000);
+    expect(out.map(o => o.msg.t)).toEqual(['shot', 'hit']);
+    expect(b.hp).toBe(PLAYER.maxHp - WEAPONS.rifle.damage);
+    out = shotAt(g, 1, b, 'head', 3000);
+    expect(b.hp).toBe(0);
+    expect(out.map(o => o.msg.t)).toEqual(['shot', 'hit', 'kill', 'score']);
+    expect(g.players.get(1)!.kills).toBe(1);
+    expect(b.deaths).toBe(1);
+  });
+
+  it('rejects shots that fire faster than the weapon allows', () => {
+    const { g, b } = twoPlayers();
+    shotAt(g, 1, b, 'body', 2000);
+    const out = shotAt(g, 1, b, 'body', 2010);
+    expect(out).toEqual([]);
+    expect(b.hp).toBe(PLAYER.maxHp - WEAPONS.rifle.damage);
+  });
+
+  it('rejects hits whose claimed point is far from the target', () => {
+    const { g, b } = twoPlayers();
+    const out = g.handle(1, { t: 'shoot', w: 'rifle', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 2, part: 'body', point: [-16, 1, 5] }] }, 2000);
+    expect(out.map(o => o.msg.t)).toEqual(['shot']);
+    expect(b.hp).toBe(PLAYER.maxHp);
+  });
+
+  it('rejects hits through walls', () => {
+    const { g, a, b } = twoPlayers();
+    // target behind the mid cover wall at z=-12 (y 0..2.2); shooter in front of it
+    a.p = [0, 0, -8]; b.p = [0, 0, -16];
+    const out = g.handle(1, { t: 'shoot', w: 'rifle', o: [0, PLAYER.eyeHeight, -8], d: [0, 0, -1], hits: [{ id: 2, part: 'body', point: [0, 0.9, -16] }] }, 2000);
+    expect(out.map(o => o.msg.t)).toEqual(['shot']);
+    expect(b.hp).toBe(PLAYER.maxHp);
+  });
+
+  it('knife only reaches 2.2m', () => {
+    const { g, b } = twoPlayers();
+    expect(shotAt(g, 1, b, 'body', 2000, 'knife').map(o => o.msg.t)).toEqual(['shot']);
+    b.p = [-24.5, 0, 0];
+    expect(shotAt(g, 1, b, 'body', 3000, 'knife').map(o => o.msg.t)).toEqual(['shot', 'hit']);
+  });
+
+  it('dead players cannot shoot and respawn after the delay', () => {
+    const { g, b } = twoPlayers();
+    shotAt(g, 1, b, 'head', 2000, 'sniper');
+    expect(b.hp).toBe(0);
+    expect(g.handle(2, { t: 'shoot', w: 'rifle', o: [-16, 1.6, 0], d: [-1, 0, 0], hits: [] }, 2100)).toEqual([]);
+    expect(g.handle(2, { t: 'respawn' }, 2500)).toEqual([]);
+    const out = g.handle(2, { t: 'respawn' }, 2000 + PLAYER.respawnMs);
+    expect(out[0].msg.t).toBe('spawn');
+    expect(b.hp).toBe(PLAYER.maxHp);
+  });
+
+  it('match flows warmup -> live -> over -> warmup and resets scores', () => {
+    const { g, a } = twoPlayers(0);
+    expect(g.match.phase).toBe('warmup');
+    let out = g.tick(MATCH.warmupMs + 1);
+    expect(g.match.phase).toBe('live');
+    expect(out.some(o => o.msg.t === 'match')).toBe(true);
+    a.kills = 5;
+    out = g.tick(MATCH.warmupMs + MATCH.durationMs + 2);
+    expect(g.match.phase).toBe('over');
+    g.tick(MATCH.warmupMs + MATCH.durationMs + MATCH.overMs + 3);
+    expect(g.match.phase).toBe('warmup');
+    g.tick(2 * MATCH.warmupMs + MATCH.durationMs + MATCH.overMs + 4);
+    expect(g.match.phase).toBe('live');
+    expect(a.kills).toBe(0);
+  });
+
+  it('kill limit ends a live match', () => {
+    const { g, a, b } = twoPlayers(0);
+    g.tick(MATCH.warmupMs + 1);
+    a.kills = MATCH.killLimit - 1;
+    a.p = [-26, 0, 0]; b.p = [-16, 0, 0];
+    shotAt(g, 1, b, 'head', MATCH.warmupMs + 500, 'sniper');
+    expect(g.match.phase).toBe('over');
+  });
+
+  it('tdm: no friendly fire, teams balanced, team score counts', () => {
+    const g = new Game('arcade', 0, 'tdm');
+    const ids = ['A', 'B', 'C', 'D'].map(n => { const r = g.join(n, 'bot', 0); return 'player' in r ? r.player : null!; });
+    expect(ids.map(p => p.team)).toEqual([0, 1, 0, 1]);
+    ids[0].p = [-26, 0, 0]; ids[2].p = [-16, 0, 0]; ids[1].p = [-21, 0, 0];
+    const friendly = g.handle(1, { t: 'shoot', w: 'rifle', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 3, part: 'body', point: [-16, 0.9, 0] }] }, 1000);
+    expect(friendly.map(o => o.msg.t)).toEqual(['shot']);
+    g.handle(1, { t: 'shoot', w: 'sniper', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 2, part: 'head', point: [-21, 1.7, 0] }] }, 3000);
+    expect(g.match.teamScore).toEqual([1, 0]);
+  });
+
+  it('spawns away from enemies', () => {
+    const { g, a } = twoPlayers();
+    a.p = [-22, 0, -22];
+    for (let i = 0; i < 10; i++) {
+      const s = g.pickSpawn(0, 2);
+      expect(Math.hypot(s.p[0] - a.p[0], s.p[2] - a.p[2])).toBeGreaterThan(20);
+    }
+  });
+});

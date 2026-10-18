@@ -1,0 +1,19 @@
+{
+  // STRIKE NIGHT: static game client + one Durable Object per room (authoritative server).
+  "name": "strike-night",
+  "account_id": "ab1da25c524f59bc61f776304bd88558",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-30",
+  "workers_dev": true,
+  "routes": [{ "pattern": "strikenight.redleg.dev", "custom_domain": true }],
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+    "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }]
+}
