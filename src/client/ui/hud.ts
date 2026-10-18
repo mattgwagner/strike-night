@@ -93,6 +93,54 @@ export class Hud {
       <table><tr><th>Player</th><th class="num">K</th><th class="num">D</th><th class="num">K/D</th><th class="num">Ping</th></tr>
       ${sorted.map(r => `<tr class="${r.me ? 'me' : ''} ${match?.mode === 'tdm' ? 't' + r.team : ''}"><td>${esc(r.name)}${r.bot ? ' 🤖' : ''}${r.alive ? '' : ' 💀'}</td><td class="num">${r.kills}</td><td class="num">${r.deaths}</td><td class="num">${(r.kills / Math.max(1, r.deaths)).toFixed(2)}</td><td class="num">${r.ping}</td></tr>`).join('')}</table>`;
   }
+
+  // ----- feel workstream additions (scope, dynamic crosshair, damage direction) -----
+  private feelEls: { scope: HTMLElement; dmg: HTMLElement[]; dmgNext: number; spread: number } | null = null;
+  private feel() {
+    if (this.feelEls) return this.feelEls;
+    const css = el('style');
+    css.textContent = `
+      .hud .hitmarker.head span { background: #ff3b3b; box-shadow: 0 0 4px #ff3b3b; }
+      .hud .crosshair { --gap: 6px; -webkit-mask: linear-gradient(#000 0 0) center / calc(2 * var(--gap)) calc(2 * var(--gap)) no-repeat, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) center / calc(2 * var(--gap)) calc(2 * var(--gap)) no-repeat exclude, linear-gradient(#000 0 0); }
+      .hud .feel-scope { position: absolute; inset: 0; display: none; background: radial-gradient(circle at 50% 50%, transparent 0, transparent 39vmin, rgba(0,0,0,0.85) 39.4vmin, #000 41vmin); }
+      .hud .feel-scope.on { display: block; }
+      .hud .feel-scope::before { content: ""; position: absolute; left: 50%; top: 50%; width: 78vmin; height: 78vmin; transform: translate(-50%, -50%); border-radius: 50%; box-shadow: inset 0 0 6vmin rgba(0,0,0,0.65); }
+      .hud .feel-scope i { position: absolute; background: #000; }
+      .hud .feel-scope i.h { left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); }
+      .hud .feel-scope i.v { top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); }
+      .hud .feel-scope i.c { left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #ff3b3b; }
+      .hud .feel-dmg { position: absolute; left: 50%; top: 50%; width: 220px; height: 220px; margin: -110px 0 0 -110px; border-radius: 50%; border: 8px solid transparent; border-top-color: rgba(255, 40, 40, 0.9); filter: drop-shadow(0 0 6px rgba(255,0,0,0.8)); opacity: 0; transition: opacity 0.9s ease-in; }
+      .hud .feel-dmg.on { opacity: 1; transition: none; }`;
+    this.root.appendChild(css);
+    const scope = el('div', 'feel-scope');
+    scope.innerHTML = '<i class="h"></i><i class="v"></i><i class="c"></i>';
+    this.root.prepend(scope);
+    const dmg = [0, 1, 2, 3].map(() => { const d = el('div', 'feel-dmg'); this.root.appendChild(d); return d; });
+    return (this.feelEls = { scope, dmg, dmgNext: 0, spread: -1 });
+  }
+  /** Sniper scope overlay on/off (also hides the crosshair). */
+  setScope(on: boolean) {
+    const f = this.feel();
+    f.scope.classList.toggle('on', on);
+    if (on) this.crosshair.style.display = 'none';
+  }
+  /** Crosshair gap in pixels from the current effective spread. */
+  setSpread(px: number) {
+    const f = this.feel();
+    const gap = Math.round(Math.max(5, Math.min(90, px)));
+    if (gap === f.spread) return;
+    f.spread = gap;
+    this.crosshair.style.setProperty('--gap', `${gap}px`);
+    this.crosshair.style.width = this.crosshair.style.height = `${2 * gap + 16}px`;
+  }
+  /** Red arc pointing at the attacker. angleRad: 0 = ahead, +π/2 = to the right. */
+  damageFrom(angleRad: number) {
+    const f = this.feel();
+    const d = f.dmg[f.dmgNext]; f.dmgNext = (f.dmgNext + 1) % f.dmg.length;
+    d.style.transform = `rotate(${angleRad}rad)`;
+    d.classList.add('on');
+    requestAnimationFrame(() => requestAnimationFrame(() => d.classList.remove('on')));
+  }
 }
 
 export function el(tag: string, cls = ''): HTMLElement { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
