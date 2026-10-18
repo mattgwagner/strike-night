@@ -14,7 +14,7 @@ npm run dev          # vite + local workerd (the CF plugin runs the DO locally).
 npm test             # vitest: tests/physics.test.ts, tests/game.test.ts
 npm run typecheck    # tsc for client AND worker (separate tsconfigs)
 npm run build        # must pass before push
-npm run deploy       # build + wrangler deploy (local OAuth login). CI deploys once CLOUDFLARE_API_TOKEN secret exists.
+npm run deploy       # manual build + wrangler deploy. Normal path: push to main → Actions deploys (secret is set).
 PLAYWRIGHT_DIR=~/.local/share/mise/installs/npm-playwright/latest/node_modules/playwright CHROMIUM=/usr/bin/chromium node e2e/two.mjs http://127.0.0.1:<port> e2e/out
 ```
 `e2e/two.mjs` joins two headless browsers to a random room, walks one, has it shoot the other, prints positions/hp and screenshots both. Run it against the dev server before every push and against production after a deploy.
