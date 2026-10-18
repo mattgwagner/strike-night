@@ -1,8 +1,19 @@
 // DOM HUD. The game pushes state in; nothing here reads the engine directly.
-import { WEAPONS, type WeaponId } from '../../shared/constants';
+import { CHARACTERS, WEAPONS, type WeaponId } from '../../shared/constants';
 import type { MatchInfo } from '../../shared/protocol';
 
-export interface ScoreRow { id: number; name: string; kills: number; deaths: number; ping: number; team: 0 | 1; me: boolean; bot?: boolean; alive: boolean }
+export interface ScoreRow { id: number; name: string; kills: number; deaths: number; ping: number; team: 0 | 1; me: boolean; bot?: boolean; alive: boolean; skin?: string }
+
+const STREAK_WINDOW = 4000;
+
+// Chunky side-view silhouettes in a 32×32 box. Thin paths turned into arrows at 18px.
+const WEAPON_PATH: Record<WeaponId, string> = {
+  knife: 'M14 2h4l1 12h-2l-1 2h-2l-1-2h-2L14 2zm-3 15h8v2h-2v8h-4v-8h-2v-2z',
+  pistol: 'M4 9h14v4h7v3h-9v1h3v8h-5v-8H8v-1H4V9z',
+  rifle: 'M1 12h7v-2h12v2h10v3h-5v1h-4v5h-3v-5h-4v3H8v-3H1v-4z',
+  shotgun: 'M1 11h8v-3h14v6H10v2H7v4H4v-4H1v-5z',
+  sniper: 'M1 13h8v-1h3V8h8v4h10v3h-6v1h-5v5h-3v-5h-4v2H8v-2H1v-4z',
+};
 
 export class Hud {
   root: HTMLElement;
@@ -11,8 +22,13 @@ export class Hud {
   private feed: HTMLElement; private hitmarker: HTMLElement; private vignette: HTMLElement;
   private center: HTMLElement; private chatlog: HTMLElement; private chatbox: HTMLElement; chatInput: HTMLInputElement;
   private status: HTMLElement; private scoreboard: HTMLElement; private crosshair: HTMLElement;
+  private streak: HTMLElement;
   private hitTimer = 0;
+  private streakAt: number[] = [];
+  private suppressStreak = false;
   onChat: (text: string) => void = () => {};
+  /** Fired from setHp so audio can follow health without a new game.ts call site. */
+  onHp: (hp: number) => void = () => {};
 
   constructor(parent: HTMLElement) {
     this.root = el('div', 'hud');
@@ -22,6 +38,7 @@ export class Hud {
       <div class="hitmarker"><span></span><span></span><span></span><span></span></div>
       <div class="vignette"></div>
       <div class="top"><div class="teams"></div><div class="timer">--:--</div><div class="phase"></div></div>
+      <div class="streak" aria-live="polite"></div>
       <div class="killfeed"></div>
       <div class="center"></div>
       <div class="chatlog"></div>
@@ -37,6 +54,7 @@ export class Hud {
     this.feed = q('.killfeed'); this.hitmarker = q('.hitmarker'); this.vignette = q('.vignette');
     this.center = q('.center'); this.chatlog = q('.chatlog'); this.chatbox = q('.chatbox'); this.chatInput = q('.chatbox input') as HTMLInputElement;
     this.status = q('.status'); this.scoreboard = q('.scoreboard'); this.crosshair = q('.crosshair');
+    this.streak = q('.streak');
     this.chatInput.addEventListener('keydown', e => {
       e.stopPropagation();
       if (e.key === 'Enter') { const t = this.chatInput.value.trim(); if (t) this.onChat(t); this.closeChat(); }
@@ -45,7 +63,15 @@ export class Hud {
   }
 
   setStatus(s: string) { this.status.textContent = s; }
-  setHp(hp: number) { this.hp.textContent = String(Math.max(0, Math.round(hp))); this.hp.classList.toggle('low', hp <= 30); }
+  setHp(hp: number) {
+    const n = Math.max(0, Math.round(hp));
+    this.hp.textContent = String(n);
+    const low = n > 0 && n <= 30;
+    this.hp.classList.toggle('low', low);
+    this.vignette.classList.toggle('low', low);
+    if (n <= 0) this.streakAt = [];
+    this.onHp(n);
+  }
   setWeapon(w: WeaponId, mag: number, reserve: number, reloading: boolean, scoped: boolean) {
     const d = WEAPONS[w];
     this.wname.textContent = d.name;
@@ -65,18 +91,33 @@ export class Hud {
     } else this.teams.style.display = 'none';
   }
   kill(killer: string, victim: string, w: WeaponId, headshot: boolean, involvesMe: boolean) {
-    const d = el('div', involvesMe ? 'me' : '');
-    d.innerHTML = `<span>${esc(killer)}</span> <span class="${headshot ? 'hs' : ''}">${w === 'knife' ? '🔪' : headshot ? '🎯' : '🔫'}</span> <span>${esc(victim)}</span>`;
+    const d = el('div', [involvesMe ? 'me' : '', headshot ? 'hs-row' : ''].filter(Boolean).join(' '));
+    const gun = WEAPONS[w].name;
+    d.setAttribute('aria-label', `${killer} ${gun}${headshot ? ' headshot' : ''} ${victim}`);
+    d.innerHTML = `<span class="who">${esc(killer)}</span> <span class="gun${headshot ? ' hs' : ''}">${weaponIcon(w)}${headshot ? '<em>HS</em>' : ''}</span> <span class="who">${esc(victim)}</span>`;
     this.feed.prepend(d);
     while (this.feed.children.length > 6) this.feed.lastChild?.remove();
     setTimeout(() => d.remove(), 6000);
+    if (!involvesMe) return;
+    queueMicrotask(() => {
+      if (this.suppressStreak) { this.suppressStreak = false; return; }
+      this.noteMyKill();
+    });
   }
   hit(head: boolean) {
     this.hitmarker.classList.add('show'); this.hitmarker.classList.toggle('head', head);
     clearTimeout(this.hitTimer); this.hitTimer = window.setTimeout(() => this.hitmarker.classList.remove('show'), 80);
   }
   hurt() { this.vignette.classList.add('hurt'); requestAnimationFrame(() => requestAnimationFrame(() => this.vignette.classList.remove('hurt'))); }
-  setCenter(big: string, sub = '') { this.center.innerHTML = big ? `<div class="big">${esc(big)}</div><div class="sub">${esc(sub)}</div>` : ''; }
+  setCenter(big: string, sub = '') {
+    if (/^(headshot by|killed by)\b/i.test(big.trim())) {
+      this.suppressStreak = true;
+      this.streakAt = [];
+      this.streak.classList.remove('show');
+      this.streak.textContent = '';
+    }
+    this.center.innerHTML = big ? `<div class="big">${esc(big)}</div><div class="sub">${esc(sub)}</div>` : '';
+  }
   chat(name: string, text: string) {
     const d = el('div'); d.innerHTML = `<b>${esc(name)}:</b> ${esc(text)}`;
     this.chatlog.appendChild(d); while (this.chatlog.children.length > 8) this.chatlog.firstChild?.remove();
@@ -89,9 +130,15 @@ export class Hud {
     this.scoreboard.classList.toggle('show', show);
     if (!show || !rows) return;
     const sorted = [...rows].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-    this.scoreboard.innerHTML = `<h2>${match?.mode === 'tdm' ? 'TEAM DEATHMATCH' : 'DEATHMATCH'}</h2>
+    const mvpId = sorted[0] && sorted[0].kills > 0 ? sorted[0].id : -1;
+    const title = match?.phase === 'over' ? 'MATCH OVER' : match?.mode === 'tdm' ? 'TEAM DEATHMATCH' : 'DEATHMATCH';
+    const teams = match?.mode === 'tdm'
+      ? `<div class="tscores"><span class="t0">NIGHT ${match.teamScore[0]}</span><span class="t1">DAY ${match.teamScore[1]}</span></div>`
+      : '';
+    const podium = match?.phase === 'over' ? renderPodium(sorted) : '';
+    this.scoreboard.innerHTML = `<h2>${title}</h2>${teams}${podium}
       <table><tr><th>Player</th><th class="num">K</th><th class="num">D</th><th class="num">K/D</th><th class="num">Ping</th></tr>
-      ${sorted.map(r => `<tr class="${r.me ? 'me' : ''} ${match?.mode === 'tdm' ? 't' + r.team : ''}"><td>${esc(r.name)}${r.bot ? ' 🤖' : ''}${r.alive ? '' : ' 💀'}</td><td class="num">${r.kills}</td><td class="num">${r.deaths}</td><td class="num">${(r.kills / Math.max(1, r.deaths)).toFixed(2)}</td><td class="num">${r.ping}</td></tr>`).join('')}</table>`;
+      ${sorted.map(r => `<tr class="${r.me ? 'me' : ''} ${match?.mode === 'tdm' ? 't' + r.team : ''}"><td><i class="pip t${r.team}"></i><span class="nm t${r.team}">${esc(r.name)}</span>${r.bot ? ' <span class="tag bot">BOT</span>' : ''}${r.alive ? '' : ' <span class="tag dead">OUT</span>'}${r.id === mvpId ? ' <span class="tag mvp">MVP</span>' : ''}</td><td class="num">${r.kills}</td><td class="num">${r.deaths}</td><td class="num">${(r.kills / Math.max(1, r.deaths)).toFixed(2)}</td><td class="num">${r.ping}</td></tr>`).join('')}</table>`;
   }
 
   // ----- feel workstream additions (scope, dynamic crosshair, damage direction) -----
@@ -141,6 +188,59 @@ export class Hud {
     d.classList.add('on');
     requestAnimationFrame(() => requestAnimationFrame(() => d.classList.remove('on')));
   }
+
+  private noteMyKill() {
+    const now = performance.now();
+    this.streakAt = this.streakAt.filter(t => now - t < STREAK_WINDOW);
+    this.streakAt.push(now);
+    const n = this.streakAt.length;
+    const label = n >= 4 ? 'RAMPAGE' : n === 3 ? 'TRIPLE KILL' : n === 2 ? 'DOUBLE KILL' : '';
+    if (!label) return;
+    this.streak.textContent = label;
+    this.streak.classList.remove('show');
+    void this.streak.offsetWidth;
+    this.streak.classList.add('show');
+  }
+}
+
+function weaponIcon(w: WeaponId): string {
+  return `<svg class="wicon" viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="${WEAPON_PATH[w]}"/></svg>`;
+}
+
+function characterColor(row: ScoreRow): string {
+  const id = row.skin ?? skinFor(row);
+  const def = id ? CHARACTERS.find(c => c.id === id) : undefined;
+  if (def) return def.color;
+  return row.team === 1 ? '#ffb300' : '#7f5cff';
+}
+
+function skinFor(row: ScoreRow): string | undefined {
+  if (row.me) {
+    try {
+      const saved = JSON.parse(localStorage.getItem('strike-night') ?? '{}') as { skin?: string };
+      if (saved.skin) return saved.skin;
+    } catch { /* ignore bad prefs */ }
+  }
+  const remotes = (window.strike as { remotes?: { get(id: number): { skin?: string } | undefined } } | undefined)?.remotes;
+  return remotes?.get(row.id)?.skin;
+}
+
+function renderPodium(sorted: ScoreRow[]): string {
+  const slots = [
+    { row: sorted[1], place: 2 },
+    { row: sorted[0], place: 1 },
+    { row: sorted[2], place: 3 },
+  ].filter((s): s is { row: ScoreRow; place: number } => !!s.row);
+  if (!slots.length) return '';
+  return `<div class="podium">${slots.map(s => {
+    const team = s.row.team === 1 ? 'var(--gold)' : 'var(--accent2)';
+    return `<div class="pod p${s.place}" style="--c:${characterColor(s.row)};--team:${team}">
+      ${s.place === 1 ? '<span class="mvp">MVP</span>' : `<span class="place">${s.place}</span>`}
+      <span class="pname">${esc(s.row.name)}</span>
+      <span class="pk">${s.row.kills} K</span>
+      <i></i>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 export function el(tag: string, cls = ''): HTMLElement { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
