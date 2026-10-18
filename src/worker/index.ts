@@ -83,15 +83,19 @@ export class Room extends DurableObject<Env> {
       this.flush(this.game.leave(a.id));
     }
     try { ws.close(1000); } catch { /* already closed */ }
-    if (this.game.players.size === 0 && this.timer) { clearInterval(this.timer); this.timer = null; }
+    // Bots are not players: an empty human roster stops the sim and drops them.
+    if (this.game.humanCount() === 0 && this.timer) { clearInterval(this.timer); this.timer = null; }
   }
 
   private ensureTicking() {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      const out = this.game.tick(Date.now());
-      this.flush(out);
-      if (this.game.players.size === 0 && this.timer) { clearInterval(this.timer); this.timer = null; }
+      if (this.game.humanCount() === 0) {
+        this.flush(this.game.setBots(0, Date.now()));
+        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+        return;
+      }
+      this.flush(this.game.tick(Date.now()));
     }, TICK_MS);
   }
 

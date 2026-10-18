@@ -1,9 +1,10 @@
 // Authoritative match state. Pure TypeScript over the shared contracts, so it
 // runs inside the Durable Object and inside vitest unchanged.
-import { MATCH, MAX_NAME, MAX_PLAYERS, PLAYER, WEAPONS, type WeaponId } from '../shared/constants';
+import { CHARACTERS, MATCH, MAX_NAME, MAX_PLAYERS, PLAYER, PRIMARY_WEAPONS, WEAPONS, type WeaponId } from '../shared/constants';
 import { MAPS, type MapData } from '../shared/map';
 import { bulletBoxes, dist, hasLos } from '../shared/physics';
 import type { ClientMsg, GameMode, HitReport, MatchInfo, PlayerSnapshot, ServerMsg, Team, Vec3 } from '../shared/protocol';
+import { BOT_NAMES, BotBrain, type BotDifficulty, type NavGrid } from './bots';
 
 export interface ServerPlayer extends PlayerSnapshot {
   lastShot: number;
@@ -22,6 +23,7 @@ export class Game {
   private nextId = 1;
   private solids;
   private rng = Math.random;
+  private bots = new BotBrain();
 
   constructor(mapId = 'arcade', now = Date.now(), mode: GameMode = 'ffa') {
     this.map = MAPS[mapId] ?? MAPS.arcade;
@@ -34,6 +36,18 @@ export class Game {
     return rest;
   }
 
+  /** Humans in the room. Bots do not keep a match alive. */
+  humanCount(): number {
+    let n = 0;
+    for (const p of this.players.values()) if (!p.bot) n++;
+    return n;
+  }
+
+  /** Nav grid for this match, built once. */
+  nav(): NavGrid { return this.bots.nav(this.map); }
+
+  setBotDifficulty(d: BotDifficulty) { this.bots.difficulty = d; }
+
   // ----- lifecycle -------------------------------------------------------
 
   join(name: string, skin: string, now: number, bot = false): { player: ServerPlayer; out: Outbox } | { error: string } {
@@ -42,10 +56,11 @@ export class Game {
     const id = this.nextId++;
     const team = this.pickTeam();
     const spawn = this.pickSpawn(team);
+    const w: WeaponId = bot ? PRIMARY_WEAPONS[Math.floor(this.rng() * PRIMARY_WEAPONS.length)] : 'rifle';
     const player: ServerPlayer = {
       id, name: clean, skin, team,
       p: [...spawn.p] as Vec3, yaw: spawn.yaw, pitch: 0,
-      hp: PLAYER.maxHp, w: 'rifle', crouch: false, moving: false, ground: true,
+      hp: PLAYER.maxHp, w, crouch: false, moving: false, ground: true,
       kills: 0, deaths: 0, ping: 0, bot,
       lastShot: 0, diedAt: 0, lastInput: now, rejects: 0,
     };
@@ -58,8 +73,49 @@ export class Game {
   }
 
   leave(id: number): Outbox {
-    if (!this.players.delete(id)) return [];
-    return [{ to: 'all', msg: { t: 'leave', id } }];
+    const p = this.players.get(id);
+    if (!p) return [];
+    this.players.delete(id);
+    this.bots.forget(id);
+    const out: Outbox = [{ to: 'all', msg: { t: 'leave', id } }];
+    if (!p.bot && this.humanCount() === 0) out.push(...this.setBots(0, 0));
+    return out;
+  }
+
+  /** Add or remove bots so the match has `n` of them (0..6). Names are fixed. */
+  setBots(n: number, now: number): Outbox {
+    const raw = Math.round(Number(n));
+    const want = Number.isFinite(raw) ? Math.max(0, Math.min(BOT_NAMES.length, raw)) : 0;
+    const out: Outbox = [];
+    const existing = [...this.players.values()].filter(p => p.bot);
+    for (let i = existing.length - 1; i >= want; i--) out.push(...this.leave(existing[i].id));
+    while ([...this.players.values()].filter(p => p.bot).length < want) {
+      const used = new Set([...this.players.values()].map(p => p.name));
+      const name = BOT_NAMES.find(nm => !used.has(nm));
+      if (!name) break;
+      const skin = CHARACTERS[this.players.size % CHARACTERS.length].id;
+      const r = this.join(name, skin, now, true);
+      if ('error' in r) break;
+      out.push(...r.out);
+    }
+    if (this.balanceBotTeams()) out.push(this.scoreMsg());
+    return out;
+  }
+
+  /** Shift bots until the two sides differ by at most one. Returns whether a team changed. */
+  private balanceBotTeams(): boolean {
+    if (this.match.mode !== 'tdm') return false;
+    const all = [...this.players.values()];
+    const count = (t: Team) => all.reduce((n, p) => n + (p.team === t ? 1 : 0), 0);
+    let changed = false;
+    for (let guard = 0; guard < 8 && Math.abs(count(0) - count(1)) > 1; guard++) {
+      const big: Team = count(0) > count(1) ? 0 : 1;
+      const bot = all.find(p => p.bot && p.team === big);
+      if (!bot) break;
+      bot.team = big === 0 ? 1 : 0;
+      changed = true;
+    }
+    return changed;
   }
 
   private pickTeam(): Team {
@@ -90,7 +146,7 @@ export class Game {
     if (!p) return [{ to: id, msg: { t: 'error', msg: 'rejoin' } }];
     switch (msg.t) {
       case 'input': {
-        if (p.hp <= 0) return [];
+        if (p.bot || p.hp <= 0) return [];
         // Clamp teleports: allow generous slack for lag, reject absurd jumps.
         const dt = Math.max(0.05, (now - p.lastInput) / 1000);
         const maxMove = PLAYER.walkSpeed * 1.5 * dt + 2.5;
@@ -128,10 +184,11 @@ export class Game {
       return this.startWarmup(now);
     }
     if (msg.cmd === 'restart') return this.startWarmup(now);
+    if (msg.cmd === 'bots') return this.setBots(Number(msg.arg), now);
     return [];
   }
 
-  private shoot(p: ServerPlayer, msg: Extract<ClientMsg, { t: 'shoot' }>, now: number): Outbox {
+  shoot(p: ServerPlayer, msg: Extract<ClientMsg, { t: 'shoot' }>, now: number): Outbox {
     const w = WEAPONS[msg.w];
     if (!w || p.hp <= 0 || this.match.phase === 'over') return [];
     if (now - p.lastShot < w.fireMs * 0.75) return [];
@@ -208,6 +265,7 @@ export class Game {
       else if (this.match.phase === 'live') out.push(...this.endMatch(now));
       else out.push(...this.startWarmup(now));
     }
+    out.push(...this.bots.tick(this, now));
     for (const p of this.players.values()) {
       if (p.hp <= 0 && now - p.diedAt >= PLAYER.respawnMs + 4000) out.push(...this.respawn(p));
     }
