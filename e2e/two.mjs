@@ -40,6 +40,9 @@ console.log('A1', JSON.stringify(a1));
 console.log('B1', JSON.stringify(b1));
 const moved = Math.hypot(a1.me[0] - b1.remote.p[0], a1.me[2] - b1.remote.p[2]);
 console.log('B sees A within', moved.toFixed(2), 'm of where A is');
+// Wait for the live phase so a warmup->live respawn cannot move players mid-test
+await a.waitForFunction(() => window.strike.match.phase === 'live', null, { timeout: 25000 });
+await a.waitForTimeout(500);
 // Walk both onto open floor by the west wall (test-only hops of 2m; the server clamps teleports)
 const hopTo = async (p, tx, tz) => {
   for (let i = 0; i < 60; i++) {
