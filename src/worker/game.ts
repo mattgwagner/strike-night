@@ -5,6 +5,8 @@ import { MAPS, type MapData } from '../shared/map';
 import { bulletBoxes, dist, hasLos } from '../shared/physics';
 import type { ClientMsg, GameMode, HitReport, MatchInfo, PlayerSnapshot, ServerMsg, Team, Vec3 } from '../shared/protocol';
 import { BOT_NAMES, BotBrain, type BotDifficulty, type NavGrid } from './bots';
+import { smokeBlocks, type SmokeVolume } from '../shared/projectiles';
+import { Projectiles } from './projectiles';
 
 export interface ServerPlayer extends PlayerSnapshot {
   lastShot: number;
@@ -24,10 +26,14 @@ export class Game {
   private solids;
   private rng = Math.random;
   private bots = new BotBrain();
+  /** Active smoke spheres; they block line of sight for shots and bots. */
+  smokes: SmokeVolume[] = [];
+  nades: Projectiles;
 
   constructor(mapId = 'arcade', now = Date.now(), mode: GameMode = 'ffa') {
     this.map = MAPS[mapId] ?? MAPS.arcade;
     this.solids = bulletBoxes(this.map.boxes);
+    this.nades = new Projectiles(this.map);
     this.match = { mode, phase: 'warmup', endsAt: now + MATCH.warmupMs, teamScore: [0, 0] };
   }
 
@@ -172,6 +178,7 @@ export class Game {
         return [];
       }
       case 'admin': return this.admin(msg, now);
+      case 'throw': return this.nades.throw(this, id, msg, now);
       case 'reload': return [];
       case 'join': return [];
     }
@@ -206,12 +213,7 @@ export class Game {
       cur.dmg += dmg; cur.head ||= h.part === 'head';
       damaged.set(h.id, cur);
     }
-    for (const [tid, { dmg, head }] of damaged) {
-      const t = this.players.get(tid)!;
-      t.hp = Math.max(0, t.hp - dmg);
-      out.push({ to: 'all', msg: { t: 'hit', from: p.id, to: tid, dmg, part: head ? 'head' : 'body', hp: t.hp } });
-      if (t.hp === 0) out.push(...this.kill(p, t, w.id, head, now));
-    }
+    for (const [tid, { dmg, head }] of damaged) out.push(...this.applyDamage(p.id, tid, dmg, head, now, w.id));
     return out;
   }
 
@@ -225,6 +227,7 @@ export class Game {
     const dx = h.point[0] - t.p[0], dz = h.point[2] - t.p[2], dy = h.point[1] - t.p[1];
     if (Math.hypot(dx, dz) > 1.6 || dy < -0.6 || dy > PLAYER.height + 0.8) return 0;
     if (w.id !== 'knife' && !hasLos(origin, h.point, this.solids)) return 0;
+    if (w.id !== 'knife' && this.smokeBlocks(origin, h.point)) return 0;
     const dmg = Math.round(w.damage * (h.part === 'head' ? w.headshot : 1));
     return dmg;
   }
@@ -247,6 +250,7 @@ export class Game {
     const s = this.pickSpawn(p.team, p.id);
     p.p = [...s.p] as Vec3; p.yaw = s.yaw; p.pitch = 0; p.hp = PLAYER.maxHp; p.crouch = false;
     if (WEAPONS[p.w].slot !== 1) p.w = 'rifle';
+    this.nades.refill(p.id);
     return [{ to: 'all', msg: { t: 'spawn', id: p.id, p: p.p, yaw: p.yaw, hp: p.hp, w: p.w } }];
   }
 
@@ -266,6 +270,7 @@ export class Game {
       else out.push(...this.startWarmup(now));
     }
     out.push(...this.bots.tick(this, now));
+    out.push(...this.nades.tick(this, now));
     for (const p of this.players.values()) {
       if (p.hp <= 0 && now - p.diedAt >= PLAYER.respawnMs + 4000) out.push(...this.respawn(p));
     }
@@ -299,4 +304,19 @@ export class Game {
     this.match.endsAt = now + MATCH.overMs;
     return [{ to: 'all', msg: { t: 'match', match: this.match } }, this.scoreMsg()];
   }
+
+  // ----- grenades workstream additions -----------------------------------
+
+  /** Damage from a validated shot or a paint burst: hp, hit, kill, score. `w` defaults to what the attacker holds. */
+  applyDamage(fromId: number, toId: number, dmg: number, head: boolean, now: number, w?: WeaponId): Outbox {
+    const p = this.players.get(fromId), t = this.players.get(toId);
+    if (!p || !t || t.hp <= 0) return [];
+    t.hp = Math.max(0, t.hp - dmg);
+    const out: Outbox = [{ to: 'all', msg: { t: 'hit', from: p.id, to: t.id, dmg, part: head ? 'head' : 'body', hp: t.hp } }];
+    if (t.hp === 0) out.push(...this.kill(p, t, w ?? p.w, head, now));
+    return out;
+  }
+
+  /** True when an active smoke sphere lies across the segment a→b. */
+  smokeBlocks(a: Vec3, b: Vec3): boolean { return smokeBlocks(a, b, this.smokes); }
 }

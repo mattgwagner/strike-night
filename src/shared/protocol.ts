@@ -1,5 +1,6 @@
 // Wire protocol between the client and the Room Durable Object. JSON for now.
 import type { WeaponId } from './constants';
+import type { GrenadeKind } from './projectiles';
 
 export type Vec3 = [number, number, number];
 export type Team = 0 | 1;           // 0 = Night, 1 = Day (used by team modes)
@@ -43,7 +44,9 @@ export type ClientMsg =
   | { t: 'chat'; text: string }
   | { t: 'ping'; c: number; rtt: number }
   | { t: 'loadout'; primary: WeaponId }
-  | { t: 'admin'; cmd: 'mode' | 'restart' | 'bots'; arg?: string | number };
+  | { t: 'admin'; cmd: 'mode' | 'restart' | 'bots'; arg?: string | number }
+  // grenades: o = eye, d = unit view direction, power 0..1 (hold time)
+  | { t: 'throw'; kind: GrenadeKind; o: Vec3; d: Vec3; power: number };
 
 export type ServerMsg =
   | { t: 'welcome'; id: number; now: number; map: string; players: PlayerSnapshot[]; match: MatchInfo }
@@ -58,6 +61,10 @@ export type ServerMsg =
   | { t: 'match'; match: MatchInfo }
   | { t: 'chat'; from: number; name: string; text: string }
   | { t: 'pong'; c: number; now: number }
-  | { t: 'error'; msg: string };
+  | { t: 'error'; msg: string }
+  // grenades: 'proj' every tick while in flight (now = server tick time), then 'burst' (paint) or 'smoke'
+  | { t: 'proj'; id: number; kind: GrenadeKind; p: Vec3; v: Vec3; owner: number; now?: number }
+  | { t: 'burst'; id: number; kind: GrenadeKind; p: Vec3; owner: number; marked: number[] }
+  | { t: 'smoke'; id: number; p: Vec3; until: number };
 
 export const PROTOCOL_VERSION = 1;

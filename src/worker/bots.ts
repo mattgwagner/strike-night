@@ -296,6 +296,7 @@ export class BotBrain {
       const d = dist(from, to);
       if (d > SIGHT) continue;
       if (!hasLos(from, to, grid.block)) continue;
+      if (game.smokeBlocks(from, to)) continue;
       if (o.id === prefer) return o;
       if (d < bestD) { bestD = d; best = o; }
     }
