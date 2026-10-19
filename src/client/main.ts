@@ -66,7 +66,7 @@ function mountPause(game: Game) {
         <label>FOV <b class="fov-n"></b><input class="fov" type="range" min="70" max="110" step="1" value="${fov}" /></label>
         <label>Volume <b class="vol-n"></b><input class="vol" type="range" min="0" max="1" step="0.05" value="${vol}" /></label>
         <label class="check"><input class="ambient" type="checkbox" ${game.sfx.ambient ? 'checked' : ''} /> Ambient hum</label>
-        <div class="bots"><span>Bots</span><button type="button" class="alt bots-dec" aria-label="Fewer bots">−</button><b class="bots-n">0</b><button type="button" class="alt bots-inc" aria-label="More bots">+</button></div>
+        <div class="bots"><span>Bots</span><button type="button" class="alt bots-dec" aria-label="Fewer bots">−</button><b class="bots-n">0</b><button type="button" class="alt bots-inc" aria-label="More bots">+</button><select class="bots-diff" aria-label="Bot difficulty"><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option></select></div>
         <label class="mode">Mode <select><option value="ffa">Free-for-all</option><option value="tdm">Team paintball</option><option value="elim">Elimination (rounds)</option></select></label>
         <button type="button" class="alt restart">RESTART MATCH</button>
       </div>
@@ -121,6 +121,8 @@ function mountPause(game: Game) {
   };
   pause.querySelector('.bots-dec')!.addEventListener('click', () => setBots(bots - 1));
   pause.querySelector('.bots-inc')!.addEventListener('click', () => setBots(bots + 1));
+  const botsDiff = pause.querySelector('.bots-diff') as HTMLSelectElement;
+  botsDiff.addEventListener('change', () => game.net.send({ t: 'admin', cmd: 'botdiff', arg: botsDiff.value }));
   sensInput.addEventListener('input', () => {
     game.input.sensitivity = Number(sensInput.value);
     paintSens();
