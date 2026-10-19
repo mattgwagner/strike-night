@@ -43,7 +43,7 @@ export function showJoin(parent: HTMLElement, defaults: JoinDefaults): Promise<J
 
     const root = el('div', 'join');
     root.innerHTML = `
-      ${coarse ? '<div class="touch">This game needs a keyboard and a mouse.</div>' : ''}
+      ${coarse ? '<div class="touch">Plays with a keyboard and a trackpad or mouse. Touch alone can only look around.</div>' : ''}
       <header class="brand">
         <h1>STRIKE <span>NIGHT</span></h1>
         <p class="tag">family paintball · browser · no install</p>

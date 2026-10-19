@@ -108,7 +108,7 @@ export class Game {
     this.renderer.domElement.addEventListener('click', () => { if (!this.input.locked) this.resume(); });
     addEventListener('resize', () => this.onResize());
     this.me.spawn(map.spawns[0].p, map.spawns[0].yaw);
-    this.hud.setCenter('Click to play', 'pointer lock gives you mouse aim');
+    this.hud.setCenter('Click to play', this.input.hardLockAvailable ? 'pointer lock gives you mouse aim' : '');
     requestAnimationFrame(t => this.frame(t));
   }
 
