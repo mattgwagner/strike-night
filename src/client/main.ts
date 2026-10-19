@@ -97,7 +97,7 @@ function mountPause(game: Game) {
   const fovN = pause.querySelector('.fov-n') as HTMLElement;
   const volN = pause.querySelector('.vol-n') as HTMLElement;
   const botsN = pause.querySelector('.bots-n') as HTMLElement;
-  const sel = pause.querySelector('select') as HTMLSelectElement;
+  const sel = pause.querySelector('.mode select') as HTMLSelectElement;
   const ambient = pause.querySelector('.ambient') as HTMLInputElement;
   // read the bot count back from the room: the server is the truth, not what this menu last asked for
   const countBots = () => [...game.remotes.values()].filter(r => r.bot).length;
