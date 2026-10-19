@@ -9,7 +9,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? 
 const p = await browser.newPage({ viewport: { width: 640, height: 400 } });
 const errs = [];
 p.on('pageerror', e => errs.push(e.message));
-await p.goto(`${url}/?room=${room}&name=Solo&skin=astro&w=rifle`);
+await p.goto(`${url}/?room=${room}&name=Solo&skin=astro&w=semi`);
 await p.click('button.go', { timeout: 90000 });
 await p.waitForFunction(() => window.strike && window.strike.myId > 0, null, { timeout: 30000 });
 await p.evaluate(() => { window.strike.input.locked = true; window.strike.setPaused(false); window.strike.net.send({ t: 'admin', cmd: 'bots', arg: 1 }); });
