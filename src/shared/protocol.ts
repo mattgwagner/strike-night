@@ -48,7 +48,7 @@ export interface RoundInfo {
 export interface HitReport { id: number; part: 'head' | 'body'; point: Vec3 }
 
 export type ClientMsg =
-  | { t: 'join'; name: string; skin: string; v: number }
+  | { t: 'join'; name: string; skin: string; v: number; token?: string }
   | { t: 'input'; p: Vec3; yaw: number; pitch: number; crouch: boolean; moving: boolean; ground: boolean; w: WeaponId }
   | { t: 'shoot'; w: WeaponId; o: Vec3; d: Vec3; hits: HitReport[] }
   | { t: 'reload' }
@@ -61,7 +61,7 @@ export type ClientMsg =
   | { t: 'throw'; kind: GrenadeKind; o: Vec3; d: Vec3; power: number };
 
 export type ServerMsg =
-  | { t: 'welcome'; id: number; now: number; map: string; players: PlayerSnapshot[]; match: MatchInfo }
+  | { t: 'welcome'; id: number; now: number; map: string; players: PlayerSnapshot[]; match: MatchInfo; token: string }
   | { t: 'state'; now: number; players: Array<Pick<PlayerSnapshot, 'id' | 'p' | 'yaw' | 'pitch' | 'hp' | 'w' | 'crouch' | 'moving' | 'ground'>> }
   | { t: 'join'; player: PlayerSnapshot }
   | { t: 'leave'; id: number }
@@ -79,4 +79,6 @@ export type ServerMsg =
   | { t: 'burst'; id: number; kind: GrenadeKind; p: Vec3; owner: number; marked: number[] }
   | { t: 'smoke'; id: number; p: Vec3; until: number };
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2; // 2: paintball ids, reconnect tokens
+/** How long a dropped socket keeps its player (id, score, position) before leave(). */
+export const RECONNECT_GRACE_MS = 10_000;

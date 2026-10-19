@@ -3,7 +3,7 @@
 import { CHARACTERS, DEFAULT_PRIMARY, ELIM, MATCH, MAX_NAME, MAX_PLAYERS, PLAYER, PRIMARY_WEAPONS, WEAPONS, type WeaponId } from '../shared/constants';
 import { MAPS, type MapData } from '../shared/map';
 import { bulletBoxes, dist, hasLos } from '../shared/physics';
-import { GAME_MODES, isTeamMode, type ClientMsg, type GameMode, type HitReport, type MatchInfo, type PlayerSnapshot, type ServerMsg, type Team, type Vec3 } from '../shared/protocol';
+import { GAME_MODES, RECONNECT_GRACE_MS, isTeamMode, type ClientMsg, type GameMode, type HitReport, type MatchInfo, type PlayerSnapshot, type ServerMsg, type Team, type Vec3 } from '../shared/protocol';
 import { BOT_NAMES, BotBrain, type BotDifficulty, type NavGrid } from './bots';
 import { smokeBlocks, type SmokeVolume } from '../shared/projectiles';
 import { Projectiles } from './projectiles';
@@ -14,6 +14,10 @@ export interface ServerPlayer extends PlayerSnapshot {
   lastInput: number;
   rejects: number;
   bot: boolean;
+  /** Reconnect token handed out in welcome; a rejoin with it keeps this player. */
+  token: string;
+  /** ms when the socket dropped, 0 while connected. */
+  gone: number;
 }
 
 export type Outbox = Array<{ to: 'all' | number; msg: ServerMsg }>;
@@ -38,7 +42,7 @@ export class Game {
   }
 
   snapshot(p: ServerPlayer): PlayerSnapshot {
-    const { lastShot: _a, diedAt: _b, lastInput: _c, rejects: _d, ...rest } = p;
+    const { lastShot: _a, diedAt: _b, lastInput: _c, rejects: _d, token: _e, gone: _f, ...rest } = p;
     return rest;
   }
 
@@ -71,15 +75,47 @@ export class Game {
       hp: sitOut ? 0 : PLAYER.maxHp, w, crouch: false, moving: false, ground: true,
       kills: 0, deaths: 0, ping: 0, bot,
       lastShot: 0, diedAt: sitOut ? now : 0, lastInput: now, rejects: 0,
+      token: bot ? '' : this.makeToken(), gone: 0,
     };
     this.players.set(id, player);
     const out: Outbox = [
-      { to: id, msg: { t: 'welcome', id, now, map: this.map.id, players: [...this.players.values()].map(p => this.snapshot(p)), match: this.match } },
+      this.welcome(player, now),
       { to: 'all', msg: { t: 'join', player: this.snapshot(player) } },
     ];
     // smoke already hanging in the air (a mid-match joiner would otherwise see straight through it)
     for (const sm of this.smokes) if (sm.until > now) out.push({ to: id, msg: { t: 'smoke', id: sm.id, p: sm.p, until: sm.until } });
     return { player, out };
+  }
+
+  private welcome(p: ServerPlayer, now: number): { to: number; msg: ServerMsg } {
+    return { to: p.id, msg: { t: 'welcome', id: p.id, now, map: this.map.id, players: [...this.players.values()].map(q => this.snapshot(q)), match: this.match, token: p.token } };
+  }
+
+  private makeToken(): string {
+    let t = '';
+    for (let i = 0; i < 24; i++) t += Math.floor(this.rng() * 36).toString(36);
+    return t;
+  }
+
+  /** The socket dropped: keep the player for RECONNECT_GRACE_MS so a blip keeps id and score. */
+  disconnect(id: number, now: number): Outbox {
+    const p = this.players.get(id);
+    if (!p || p.bot) return [];
+    p.gone = now;
+    return [];
+  }
+
+  /** A join carrying a live token re-attaches to the same player. Null if unknown or expired. */
+  rejoin(token: string, now: number): { player: ServerPlayer; out: Outbox } | null {
+    if (!token) return null;
+    for (const p of this.players.values()) {
+      if (p.bot || p.token !== token) continue;
+      p.gone = 0; p.lastInput = now; p.rejects = 0;
+      const out: Outbox = [this.welcome(p, now)];
+      for (const sm of this.smokes) if (sm.until > now) out.push({ to: p.id, msg: { t: 'smoke', id: sm.id, p: sm.p, until: sm.until } });
+      return { player: p, out };
+    }
+    return null;
   }
 
   leave(id: number): Outbox {
@@ -283,6 +319,7 @@ export class Game {
   tick(now: number): Outbox {
     const out: Outbox = [];
     if (this.players.size === 0) return out;
+    for (const p of [...this.players.values()]) if (p.gone && now - p.gone > RECONNECT_GRACE_MS) out.push(...this.leave(p.id));
     if (this.match.mode === 'elim' && this.match.phase === 'live') out.push(...this.tickRound(now));
     else if (now >= this.match.endsAt) {
       if (this.match.phase === 'warmup') out.push(...this.startLive(now));

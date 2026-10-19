@@ -179,3 +179,41 @@ describe('hits model', () => {
     expect(b.hp).toBe(3);
   });
 });
+
+describe('reconnect grace', () => {
+  it('a dropped socket keeps the player for the grace period, then leaves', async () => {
+    const { RECONNECT_GRACE_MS } = await import('../src/shared/protocol');
+    const g = new Game('arcade', 0);
+    const r = g.join('Amy', 'ghost', 0);
+    if (!('player' in r)) throw new Error('join failed');
+    r.player.kills = 4;
+    expect(g.disconnect(r.player.id, 1000)).toEqual([]);
+    g.tick(1000 + RECONNECT_GRACE_MS - 1);
+    expect(g.players.has(r.player.id)).toBe(true);
+    const out = g.tick(1000 + RECONNECT_GRACE_MS + 1);
+    expect(g.players.has(r.player.id)).toBe(false);
+    expect(out.some(o => o.msg.t === 'leave')).toBe(true);
+  });
+
+  it('rejoining with the welcome token keeps id and score; a bad token does not', () => {
+    const g = new Game('arcade', 0);
+    const r = g.join('Amy', 'ghost', 0);
+    if (!('player' in r)) throw new Error('join failed');
+    const welcome = r.out[0].msg;
+    if (welcome.t !== 'welcome') throw new Error('no welcome');
+    expect(welcome.token).toHaveLength(24);
+    r.player.kills = 4;
+    g.disconnect(r.player.id, 1000);
+    const back = g.rejoin(welcome.token, 2000);
+    expect(back?.player.id).toBe(r.player.id);
+    expect(back?.player.kills).toBe(4);
+    expect(back?.player.gone).toBe(0);
+    expect(back?.out[0].msg.t).toBe('welcome');
+    expect(g.rejoin('nope', 2000)).toBeNull();
+    expect(g.rejoin('', 2000)).toBeNull();
+    // bots never carry a token
+    g.setBots(1, 0);
+    const bot = [...g.players.values()].find(p => p.bot)!;
+    expect(bot.token).toBe('');
+  });
+});

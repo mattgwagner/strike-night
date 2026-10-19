@@ -70,6 +70,14 @@ const a2 = await state(a), b2 = await state(b);
 console.log('A2', JSON.stringify(a2));
 console.log('B2', JSON.stringify(b2));
 console.log(`B hp ${hpBefore} -> ${b2.hp} (expect 3 -> 0, B marked out: ${!b2.alive}); A sees B hp ${a2.remote.hp}`);
+// Reconnect: close A's socket; the server keeps the player for the grace period and A rejoins with the same id
+const idBefore = await a.evaluate(() => window.strike.myId);
+await a.evaluate(() => window.strike.net.ws.close());
+await a.waitForFunction(() => window.strike.net.connected, null, { timeout: 20000 });
+await a.waitForTimeout(500);
+const idAfter = await a.evaluate(() => window.strike.myId);
+const bStillSeesA = await b.evaluate(id => window.strike.remotes.has(id), idBefore);
+console.log(`reconnect kept id: ${idBefore === idAfter} (${idBefore} -> ${idAfter}); B still sees A: ${bStillSeesA}`);
 await a.screenshot({ path: `${out}/a.png` });
 await b.screenshot({ path: `${out}/b.png` });
 console.log(errs.length ? errs.join('\n') : 'no console errors');

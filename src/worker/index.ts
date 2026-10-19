@@ -60,9 +60,12 @@ export class Room extends DurableObject<Env> {
     const now = Date.now();
     const a = ws.deserializeAttachment() as Attachment | null;
     if (msg.t === 'join') {
+      if (msg.v !== PROTOCOL_VERSION) { this.send(ws, { t: 'error', msg: 'update' }); try { ws.close(4001, 'update'); } catch { /* gone */ } return; }
       if (a && this.game.players.has(a.id)) this.flush(this.game.leave(a.id));
-      const r = this.game.join(msg.name, msg.skin, now);
+      const r = (msg.token && this.game.rejoin(msg.token, now)) || this.game.join(msg.name, msg.skin, now);
       if ('error' in r) { this.send(ws, { t: 'error', msg: r.error }); return; }
+      const old = this.sockets.get(r.player.id);
+      if (old && old !== ws) { try { old.close(4000, 'replaced'); } catch { /* gone */ } }
       ws.serializeAttachment({ id: r.player.id } satisfies Attachment);
       this.sockets.set(r.player.id, ws);
       this.flush(r.out);
@@ -78,13 +81,13 @@ export class Room extends DurableObject<Env> {
 
   private drop(ws: WebSocket) {
     const a = ws.deserializeAttachment() as Attachment | null;
-    if (a) {
+    if (a && this.sockets.get(a.id) === ws) {
       this.sockets.delete(a.id);
-      this.flush(this.game.leave(a.id));
+      // Keep the player for the reconnect grace; tick() calls leave() when it expires,
+      // and the interval stops itself once the human roster is empty.
+      this.flush(this.game.disconnect(a.id, Date.now()));
     }
     try { ws.close(1000); } catch { /* already closed */ }
-    // Bots are not players: an empty human roster stops the sim and drops them.
-    if (this.game.humanCount() === 0 && this.timer) { clearInterval(this.timer); this.timer = null; }
   }
 
   private ensureTicking() {
