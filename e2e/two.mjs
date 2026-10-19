@@ -12,6 +12,8 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? 
 const errs = [];
 const mk = async (tag) => {
   const p = await browser.newPage({ viewport: { width: 960, height: 600 } });
+  // QUALITY=high|low pins the graphics level (an explicit choice, so auto-detect stays out of it)
+  if (process.env.QUALITY) await p.addInitScript(q => { try { localStorage.setItem('strike-night', JSON.stringify({ quality: q })); } catch {} }, process.env.QUALITY);
   p.on('console', m => { if (process.env.DBG) console.log(tag, m.type(), m.text().slice(0, 200)); if (m.type() === 'error') errs.push(`${tag}: ${m.text().slice(0, 300)}`); });
   p.on('pageerror', e => errs.push(`${tag}: ${e.message}`));
   return p;
