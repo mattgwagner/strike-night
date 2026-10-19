@@ -63,12 +63,14 @@ async function profile(quality) {
   await p.waitForTimeout(1200);
   await look(-Math.PI / 2);
   await p.screenshot({ path: `${out}/${quality}-smoke.png` });
-  // a controlled snapshot for draw calls: fixed pose, smoke up, bots and short-lived fx hidden
+  // a controlled snapshot for draw calls: the cloud in view from a fixed offset, bots hidden
   const snap = await p.evaluate(() => {
     const g = window.strike;
     const hidden = [];
     for (const r of g.remotes.values()) if (r.rig.group.visible) { r.rig.group.visible = false; hidden.push(r.rig.group); }
-    g.camera.position.set(-28, 1.6, 0); g.camera.rotation.set(0.05, -Math.PI / 2, 0); g.camera.updateMatrixWorld();
+    // look at the cloud from 10 m west of it, wherever the throw landed
+    const c = g.grenades.smoke.volumes()[0]?.p ?? [-18, 0, 0];
+    g.camera.position.set(c[0] - 10, 1.6, c[2]); g.camera.lookAt(c[0], 1.6, c[2]); g.camera.updateMatrixWorld();
     g.renderer.render(g.scene, g.camera);
     const { calls, triangles } = g.renderer.info.render;
     for (const o of hidden) o.visible = true;
