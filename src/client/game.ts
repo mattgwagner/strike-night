@@ -19,6 +19,7 @@ import { buildViewmodel, type Viewmodel } from './world/viewmodel';
 import { Fx } from './world/fx';
 import { buildSkin, type SkinRig } from './world/skins';
 import { Grenades } from './engine/grenades';
+import { pixelRatioFor, type Quality } from './quality';
 
 const INTERP_MS = 100;
 
@@ -70,11 +71,14 @@ export class Game {
   private paused = false;
   private stepT = 0;
   onPause: (paused: boolean) => void = () => {};
+  /** Graphics level (see quality.ts). Antialias is fixed when the renderer is made; the rest applies live. */
+  quality: Quality;
 
-  constructor(root: HTMLElement, choice: JoinChoice) {
+  constructor(root: HTMLElement, choice: JoinChoice, quality: Quality = 'high') {
     const map = MAPS.arcade;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.quality = quality;
+    this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(pixelRatioFor(quality));
     this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -103,6 +107,7 @@ export class Game {
     this.net.connect(choice.name, choice.skin);
     this.names.set(-1, choice.name);
     this.grenades = new Grenades(this, choice.skin);
+    this.setQuality(quality);
     this.input.onKey = (code, down) => this.onKey(code, down);
     this.input.onLockChange = locked => { if (!locked && !this.hud.chatOpen) this.setPaused(true); };
     this.renderer.domElement.addEventListener('click', () => { if (!this.input.locked) this.resume(); });
@@ -115,7 +120,18 @@ export class Game {
   resume() { this.sfx.init(); this.input.lock(); this.setPaused(false); }
   setPaused(p: boolean) { this.paused = p; this.onPause(p); if (!p) this.hud.setCenter(''); }
 
+  /** Switch graphics level live: pixel ratio, map lights + materials, fx pools, smoke detail. */
+  setQuality(q: Quality) {
+    this.quality = q;
+    this.renderer.setPixelRatio(pixelRatioFor(q));
+    this.renderer.setSize(innerWidth, innerHeight);
+    this.world.setQuality(q);
+    this.fx.setQuality(q);
+    this.grenades.smoke.low = q === 'low';
+  }
+
   private onResize() {
+    this.renderer.setPixelRatio(pixelRatioFor(this.quality));
     this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
   }

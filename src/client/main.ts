@@ -3,6 +3,7 @@ import { Game } from './game';
 import { showJoin } from './ui/join';
 import { el } from './ui/hud';
 import { PRIMARY_WEAPONS, type WeaponId } from '../shared/constants';
+import { AUTO_LOW_FPS, AUTO_PROBE_FRAMES, isQuality, lowEndDevice, type Quality } from './quality';
 
 declare global { const __BUILD__: string; interface Window { strike?: Game } }
 
@@ -15,6 +16,12 @@ interface Prefs {
   volume?: number;
   ambient?: boolean;
   rooms?: string[];
+  /** Graphics level the player picked in the menu. Never overridden. */
+  quality?: Quality;
+  /** Set when the frame-rate check picked Low (only when `quality` was never chosen). */
+  autoQuality?: Quality;
+  /** The "set to Low" note has been shown once. */
+  qualityNoted?: boolean;
 }
 
 const app = document.getElementById('app')!;
@@ -42,7 +49,9 @@ async function boot() {
   const rooms = [choice.room, ...(saved.rooms ?? []).filter(r => r !== choice.room)].slice(0, 5);
   savePrefs({ name: choice.name, skin: choice.skin, primary: choice.primary, rooms });
   history.replaceState(null, '', `?room=${choice.room}`);
-  const game = new Game(app, choice);
+  const explicit = isQuality(saved.quality) ? saved.quality : undefined;
+  const quality: Quality = explicit ?? (saved.autoQuality === 'low' || lowEndDevice() ? 'low' : 'high');
+  const game = new Game(app, choice, quality);
   window.strike = game;
   if (saved.sens) game.input.sensitivity = saved.sens;
   if (saved.fov) game.baseFov = clamp(saved.fov, 70, 110);
@@ -50,6 +59,37 @@ async function boot() {
   if (saved.ambient === false) game.sfx.setAmbient(false);
   game.hud.onHp = hp => game.sfx.setLowHealth(hp === 1);
   mountPause(game);
+  if (!explicit) autoQuality(game);
+}
+
+/**
+ * No graphics choice yet: once the match is live, a slow device (or one already guessed low-end)
+ * gets Low and a one-line note. Stops as soon as the player picks a level in the menu.
+ */
+function autoQuality(game: Game) {
+  const SKIP = 10; // shader compiles and the first uploads hitch; don't count them
+  let n = 0, start = 0;
+  const tick = (t: number) => {
+    if (qualityChosen) return;
+    if (game.match.phase !== 'live' || !game.input.locked || document.hidden) { n = 0; requestAnimationFrame(tick); return; }
+    if (game.quality === 'low') { noteLow(game); return; }
+    n++;
+    if (n === SKIP) start = t;
+    if (n < SKIP + AUTO_PROBE_FRAMES) { requestAnimationFrame(tick); return; }
+    const fps = (AUTO_PROBE_FRAMES * 1000) / (t - start);
+    if (fps < AUTO_LOW_FPS) {
+      game.setQuality('low');
+      savePrefs({ autoQuality: 'low' });
+      noteLow(game);
+    }
+  };
+  requestAnimationFrame(tick);
+}
+let qualityChosen = false;
+function noteLow(game: Game) {
+  if (loadPrefs().qualityNoted) return;
+  game.hud.chat('·', 'Graphics set to Low for this device. Change it in the menu.');
+  savePrefs({ qualityNoted: true });
 }
 
 function mountPause(game: Game) {
@@ -67,6 +107,7 @@ function mountPause(game: Game) {
         <label>Volume <b class="vol-n"></b><input class="vol" type="range" min="0" max="1" step="0.05" value="${vol}" /></label>
         <label class="check"><input class="ambient" type="checkbox" ${game.sfx.ambient ? 'checked' : ''} /> Ambient hum</label>
         <div class="bots"><span>Bots</span><button type="button" class="alt bots-dec" aria-label="Fewer bots">−</button><b class="bots-n">0</b><button type="button" class="alt bots-inc" aria-label="More bots">+</button><select class="bots-diff" aria-label="Bot difficulty"><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option></select></div>
+        <label class="gfx">Graphics <select aria-label="Graphics quality"><option value="high">High</option><option value="low">Low</option></select></label>
         <label class="mode">Mode <select><option value="ffa">Free-for-all</option><option value="tdm">Team paintball</option><option value="elim">Elimination (rounds)</option></select></label>
         <button type="button" class="alt restart">RESTART MATCH</button>
       </div>
@@ -138,6 +179,14 @@ function mountPause(game: Game) {
     paintVol();
     savePrefs({ volume: game.sfx.volume });
   });
+  const gfx = pause.querySelector('.gfx select') as HTMLSelectElement;
+  gfx.value = game.quality;
+  gfx.addEventListener('change', () => {
+    if (!isQuality(gfx.value)) return;
+    qualityChosen = true;
+    game.setQuality(gfx.value);
+    savePrefs({ quality: gfx.value });
+  });
   ambient.addEventListener('change', () => {
     game.sfx.setAmbient(ambient.checked);
     savePrefs({ ambient: ambient.checked });
@@ -146,6 +195,7 @@ function mountPause(game: Game) {
     pause.classList.toggle('show', p);
     game.hud.root.classList.toggle('away', p);
     sel.value = game.match.mode;
+    gfx.value = game.quality;
     paintBots();
     fovInput.value = String(Math.round(game.baseFov));
     paintFov();

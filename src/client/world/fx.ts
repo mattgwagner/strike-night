@@ -4,6 +4,7 @@
 // constructor; spawning an effect only writes into typed arrays.
 import * as THREE from 'three';
 import type { MapBox } from '../../shared/map';
+import type { Quality } from '../quality';
 
 type V3 = [number, number, number] | THREE.Vector3;
 const vx = (v: V3) => (Array.isArray(v) ? v[0] : v.x);
@@ -54,16 +55,22 @@ void main() {
   gl_FragColor = vec4(vColor, vAlpha * smoothstep(1.0, 0.45, d));
 }`;
 
+const PARTICLE_ATTRS = ['position', 'aAlpha', 'aSize', 'aColor'];
+const DECAL_ATTRS = ['position', 'aColor', 'aSeed'];
+
 class Particles {
   readonly points: THREE.Points;
   private pos: Float32Array; private vel: Float32Array; private col: Float32Array;
   private size: Float32Array; private alpha: Float32Array;
   private life: Float32Array; private max: Float32Array; private size0: Float32Array; private grow: Float32Array;
   private next = 0; private live = 0;
+  /** Slots in use: the whole pool on High, a fraction on Low (fewer to simulate and upload). */
+  private cap: number;
   private geo = new THREE.BufferGeometry();
   readonly mat: THREE.ShaderMaterial;
 
   constructor(private n: number, additive: boolean, private gravity: number, private drag: number) {
+    this.cap = n;
     this.pos = new Float32Array(n * 3); this.vel = new Float32Array(n * 3); this.col = new Float32Array(n * 3);
     this.size = new Float32Array(n); this.alpha = new Float32Array(n);
     this.life = new Float32Array(n); this.max = new Float32Array(n); this.size0 = new Float32Array(n); this.grow = new Float32Array(n);
@@ -81,21 +88,29 @@ class Particles {
   }
 
   spawn(x: number, y: number, z: number, vx: number, vy: number, vz: number, color: THREE.Color, size: number, life: number, grow = 0) {
-    const i = this.next; this.next = (this.next + 1) % this.n;
+    const i = this.next % this.cap; this.next = (i + 1) % this.cap;
     const k = i * 3;
     this.pos[k] = x; this.pos[k + 1] = y; this.pos[k + 2] = z;
     this.vel[k] = vx; this.vel[k + 1] = vy; this.vel[k + 2] = vz;
     this.col[k] = color.r; this.col[k + 1] = color.g; this.col[k + 2] = color.b;
     this.size0[i] = size; this.size[i] = size; this.grow[i] = grow;
     this.life[i] = life; this.max[i] = life; this.alpha[i] = 1;
-    this.live = this.n; // cheap: keep updating until everything has died
+    this.live = this.cap; // cheap: keep updating until everything has died
+  }
+
+  setCap(cap: number) {
+    this.cap = Math.max(1, Math.min(this.n, cap));
+    for (let i = this.cap; i < this.n; i++) { this.life[i] = 0; this.alpha[i] = 0; this.size[i] = 0; }
+    this.geo.setDrawRange(0, this.cap);
+    this.live = this.n; // one pass to clear what was dropped
   }
 
   update(dt: number) {
     if (!this.live) return;
     let alive = 0;
     const damp = Math.exp(-this.drag * dt);
-    for (let i = 0; i < this.n; i++) {
+    const end = Math.min(this.n, Math.max(this.cap, this.live));
+    for (let i = 0; i < end; i++) {
       if (this.life[i] <= 0) { if (this.alpha[i] !== 0) { this.alpha[i] = 0; this.size[i] = 0; } continue; }
       alive++;
       this.life[i] -= dt;
@@ -107,7 +122,7 @@ class Particles {
       this.size[i] = this.size0[i] * (1 + this.grow[i] * (1 - f));
     }
     this.live = alive;
-    for (const name of ['position', 'aAlpha', 'aSize', 'aColor']) (this.geo.getAttribute(name) as THREE.BufferAttribute).needsUpdate = true;
+    for (const name of PARTICLE_ATTRS) (this.geo.getAttribute(name) as THREE.BufferAttribute).needsUpdate = true;
   }
 
   dispose() { this.geo.dispose(); this.mat.dispose(); }
@@ -144,6 +159,8 @@ void main() {
 }`;
 
 const MAX_DECALS = 200;
+/** Splats kept on Low (the oldest go first). */
+const LOW_DECALS = 60;
 const DECAL_HOLD = 18, DECAL_FADE = 2;
 
 // ----- the system -------------------------------------------------------------
@@ -176,6 +193,9 @@ export class Fx {
   private dcGeo = new THREE.BufferGeometry();
   private dcMat = new THREE.ShaderMaterial({ vertexShader: DECAL_VS, fragmentShader: DECAL_FS, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
   private dcNext = 0;
+  private dcCap = MAX_DECALS;
+  /** Low quality: no muzzle point lights (each one is a per-pixel cost on every lit surface). */
+  private lightsOn = true;
   // muzzle flash sprites + lights
   private sprites: Array<{ s: THREE.Sprite; life: number; max: number; fresh: boolean }> = [];
   private lights: Array<{ l: THREE.PointLight; life: number; max: number; peak: number; fresh: boolean }> = [];
@@ -238,6 +258,19 @@ export class Fx {
     scene.add(this.group);
   }
 
+  /** High: the full pools and muzzle lights. Low: no muzzle lights, ~a third of the splats and particles. */
+  setQuality(q: Quality) {
+    const low = q === 'low';
+    this.lightsOn = !low;
+    for (const L of this.lights) { L.l.visible = !low; L.life = 0; L.l.intensity = 0; }
+    this.sparks.setCap(low ? 128 : 384);
+    this.puffs.setCap(low ? 64 : 192);
+    this.paint.setCap(low ? 160 : 512);
+    this.dcCap = low ? LOW_DECALS : MAX_DECALS;
+    for (let i = this.dcCap; i < MAX_DECALS; i++) if (this.dcAge[i] < DECAL_HOLD + DECAL_FADE) this.dcAge[i] = DECAL_HOLD + DECAL_FADE;
+    this.dcGeo.setDrawRange(0, this.dcCap * 6);
+  }
+
   /** Compile every effect's shader up front so the first shot does not hitch. */
   warm(renderer: THREE.WebGLRenderer, camera: THREE.Camera) {
     for (const s of this.sprites) s.s.visible = true;
@@ -258,6 +291,7 @@ export class Fx {
 
   /** Brief point light (the local viewmodel flash uses this directly). */
   light(at: V3, intensity = 6) {
+    if (!this.lightsOn) return;
     const L = this.lights[this.lightNext]; this.lightNext = (this.lightNext + 1) % this.lights.length;
     L.l.position.set(vx(at), vy(at), vz(at));
     L.peak = intensity; L.life = L.max = 0.06; L.l.intensity = intensity; L.fresh = true;
@@ -398,7 +432,7 @@ export class Fx {
   // ----- internals -----------------------------------------------------------
 
   private decal(x: number, y: number, z: number, n: [number, number, number], r: number, color: THREE.Color) {
-    const i = this.dcNext; this.dcNext = (this.dcNext + 1) % MAX_DECALS;
+    const i = this.dcNext % this.dcCap; this.dcNext = (i + 1) % this.dcCap;
     // tangent basis on an axis-aligned face
     let ux = 0, uy = 0, uz = 0, wx = 0, wy = 0, wz = 0;
     if (Math.abs(n[1]) > 0.5) { ux = 1; wz = 1; } else if (Math.abs(n[0]) > 0.5) { uz = 1; wy = 1; } else { ux = 1; wy = 1; }
@@ -421,7 +455,7 @@ export class Fx {
       this.dcSeed[i * 4 + j] = seed;
     }
     this.dcAge[i] = 0;
-    for (const name of ['position', 'aColor', 'aSeed']) (this.dcGeo.getAttribute(name) as THREE.BufferAttribute).needsUpdate = true;
+    for (const name of DECAL_ATTRS) (this.dcGeo.getAttribute(name) as THREE.BufferAttribute).needsUpdate = true;
   }
 
   /** Face normal of the box surface at a hit point; falls back to -dir. */

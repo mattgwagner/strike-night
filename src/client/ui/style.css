@@ -143,7 +143,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .paused .stack > label { display: grid; grid-template-columns: 72px 42px 1fr; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
 .paused .stack > label b { font-variant-numeric: tabular-nums; letter-spacing: 0; text-transform: none; font-size: 13px; }
 .paused .stack > label.check { grid-template-columns: auto 1fr; text-transform: none; letter-spacing: 0.04em; font-size: 14px; }
-.paused .stack > label.mode { grid-template-columns: 72px 1fr; }
+.paused .stack > label.mode, .paused .stack > label.gfx { grid-template-columns: 72px 1fr; }
 .paused input[type=range] { width: 100%; accent-color: var(--accent); }
 .paused select { width: 100%; background: #0c101c; color: #fff; border: 1px solid #334; border-radius: 8px; padding: 7px 8px; }
 .paused .bots { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }

@@ -6,6 +6,8 @@ import { SMOKE, type SmokeVolume } from '../../shared/projectiles';
 import type { Vec3 } from '../../shared/protocol';
 
 const PUFFS = 40;
+/** Low quality: fewer, bigger puffs. Each puff is a draw call and a screen of overdraw up close. */
+const LOW_PUFFS = 14, LOW_GROW = 1.2;
 const FILL_MS = 1000, FADE_MS = 2000;
 
 let puffTex: THREE.Texture | null = null;
@@ -36,11 +38,12 @@ class Cloud {
   group = new THREE.Group();
   puffs: Puff[] = [];
   mats: THREE.SpriteMaterial[] = [];
-  constructor(public id: number, public p: Vec3, public until: number, public born: number) {
+  constructor(public id: number, public p: Vec3, public until: number, public born: number, low = false) {
     const tex = puffTexture();
-    for (let i = 0; i < PUFFS; i++) {
+    const count = low ? LOW_PUFFS : PUFFS;
+    for (let i = 0; i < count; i++) {
       // fill the sphere evenly-ish: a dense core, and a shell near the rim
-      const shell = i < PUFFS * 0.55;
+      const shell = i < count * 0.55;
       const r = (shell ? 0.55 + Math.random() * 0.35 : Math.random() * 0.55) * SMOKE.radius;
       const a = Math.random() * Math.PI * 2;
       const y = (Math.random() * 0.9 - 0.15) * SMOKE.radius * 0.8;
@@ -48,7 +51,7 @@ class Cloud {
       const m = new THREE.SpriteMaterial({ map: tex, color: new THREE.Color(shade, shade, shade * 1.03), transparent: true, depthWrite: false, opacity: 0, fog: true });
       m.rotation = Math.random() * Math.PI * 2;
       const s = new THREE.Sprite(m);
-      const size = SMOKE.radius * (0.9 + Math.random() * 0.7);
+      const size = SMOKE.radius * (0.9 + Math.random() * 0.7) * (low ? LOW_GROW : 1);
       this.puffs.push({ s, r, a, y, w: (0.08 + Math.random() * 0.12) * (Math.random() < 0.5 ? -1 : 1), size, spin: (Math.random() - 0.5) * 0.3 });
       this.mats.push(m);
       this.group.add(s);
@@ -62,6 +65,8 @@ export class SmokeField {
   private clouds = new Map<number, Cloud>();
   private veil: THREE.Mesh;
   private veilMat: THREE.MeshBasicMaterial;
+  /** Low quality: new clouds use fewer, larger puffs (clouds already in the air keep theirs). */
+  low = false;
 
   constructor(private scene: THREE.Scene, camera: THREE.Camera) {
     this.veilMat = new THREE.MeshBasicMaterial({ color: 0x9a9a9e, transparent: true, opacity: 0, depthTest: false, depthWrite: false });
@@ -75,7 +80,7 @@ export class SmokeField {
   /** A cloud from the server. `until` and `now` are server ms. */
   add(id: number, p: Vec3, until: number, now: number) {
     if (this.clouds.has(id)) return;
-    const c = new Cloud(id, p, until, now);
+    const c = new Cloud(id, p, until, now, this.low);
     this.clouds.set(id, c);
     this.scene.add(c.group);
   }

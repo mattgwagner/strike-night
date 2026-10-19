@@ -3,7 +3,8 @@
 // colours). Tagged props (spinners, hammers, animatronics, signs) get a richer
 // mesh and animate in tick(). The world agent owns this directory.
 import * as THREE from 'three';
-import type { MapBox, MapData } from '../../shared/map';
+import type { MapBox, MapData, PointLight as MapLight } from '../../shared/map';
+import type { Quality } from '../quality';
 
 type TexName = 'hazard' | 'turf' | 'dirt' | 'chainlink' | 'tile' | 'crate' | 'plate' | 'floor' | 'rollup' | 'grate' | 'curtain' | 'pizzawall' | 'arenawall' | 'trailer' | 'concrete' | 'wood' | 'bleacher' | 'cabinet';
 
@@ -66,7 +67,7 @@ const MATS: Record<string, MatDef> = {
 /** Tags whose box is replaced entirely by a custom mesh. */
 const REPLACED = new Set(['animatronic', 'marquee', 'scoreboard', 'scorescreen']);
 
-export interface BuiltWorld { group: THREE.Group; dispose(): void; tick(dt: number, t: number): void }
+export interface BuiltWorld { group: THREE.Group; dispose(): void; tick(dt: number, t: number): void; setQuality(q: Quality): void }
 
 export function buildWorld(map: MapData, scene: THREE.Scene): BuiltWorld {
   const group = new THREE.Group();
@@ -130,8 +131,23 @@ export function buildWorld(map: MapData, scene: THREE.Scene): BuiltWorld {
   }
   group.add(new THREE.HemisphereLight(0x9fb2e8, 0x3a3040, 0.9));
   group.add(new THREE.AmbientLight(new THREE.Color(map.sky.ambient), 0.7));
+  // Low quality: every lit fragment loops over every point light, so the map's lights are
+  // merged by room into a few (hidden on High), with a little extra fill for the ones dropped.
+  const lowLights = mergeLights(map.lights).map((l, i) => {
+    const pl = new THREE.PointLight(l.color, l.intensity, l.distance, 1.7);
+    pl.position.set(l.p[0], l.p[1], l.p[2]);
+    pl.userData.flicker = l.flicker; pl.userData.base = l.intensity; pl.userData.phase = i * 1.37;
+    pl.visible = false;
+    group.add(pl);
+    return pl;
+  });
+  const lowFill = new THREE.HemisphereLight(0x9fb2e8, 0x3a3040, 0.6);
+  lowFill.visible = false;
+  group.add(lowFill);
+  lights.push(...lowLights);
   animators.push((_dt, t) => {
     for (const pl of lights) {
+      if (!pl.visible) continue;
       if (!pl.userData.flicker) continue;
       const ph = pl.userData.phase as number;
       const buzz = 0.75 + 0.25 * Math.sin(t * 23 + ph) * Math.sin(t * 7 + ph);
@@ -148,8 +164,57 @@ export function buildWorld(map: MapData, scene: THREE.Scene): BuiltWorld {
   return {
     group,
     tick(dt, t) { for (const a of animators) a(dt, t); },
+    setQuality(q) {
+      const low = q === 'low';
+      for (const pl of lights) pl.visible = lowLights.includes(pl) === low;
+      lowFill.visible = low;
+      // Lambert twins of the PBR materials: same colours, maps and glow, far cheaper per pixel
+      group.traverse(o => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const hi = (m.userData.hiMat ??= m.material) as THREE.Material | THREE.Material[];
+        m.material = low ? (Array.isArray(hi) ? hi.map(x => lambertOf(x, keep)) : lambertOf(hi, keep)) : hi;
+      });
+    },
     dispose() { scene.remove(group); for (const d of disposables) d.dispose(); },
   };
+}
+
+/** Map lights merged by room (within `radius` m), brightest `max` kept; tiny accent lights dropped. */
+export function mergeLights(list: MapLight[], max = 6, radius = 12) {
+  const out: Array<{ p: [number, number, number]; color: THREE.Color; intensity: number; distance: number; flicker: boolean }> = [];
+  for (const l of [...list].filter(l => l.distance >= 8).sort((a, b) => b.intensity - a.intensity)) {
+    const c = out.find(c => Math.hypot(c.p[0] - l.p[0], c.p[1] - l.p[1], c.p[2] - l.p[2]) < radius);
+    if (!c) { out.push({ p: [...l.p], color: new THREE.Color(l.color), intensity: l.intensity, distance: l.distance, flicker: !!l.flicker }); continue; }
+    const gap = Math.hypot(c.p[0] - l.p[0], c.p[1] - l.p[1], c.p[2] - l.p[2]);
+    const w = c.intensity + l.intensity;
+    for (let i = 0; i < 3; i++) c.p[i] = (c.p[i] * c.intensity + l.p[i] * l.intensity) / w;
+    c.color.multiplyScalar(c.intensity).add(new THREE.Color(l.color).multiplyScalar(l.intensity)).multiplyScalar(1 / w);
+    c.distance = Math.max(c.distance, l.distance) + gap / 2;
+    // a merged light sits between the rooms it replaces: a bit brighter so both still read lit
+    c.intensity = w * 1.25;
+    c.flicker ||= !!l.flicker;
+  }
+  return out.sort((a, b) => b.intensity - a.intensity).slice(0, max);
+}
+
+const lambertCache = new WeakMap<THREE.Material, THREE.Material>();
+/** Lambert stand-in for a MeshStandardMaterial (others pass through). Metal a little darker, since it loses its highlights. */
+function lambertOf(m: THREE.Material, keep: Keep): THREE.Material {
+  const std = m as THREE.MeshStandardMaterial;
+  if (!std.isMeshStandardMaterial) return m;
+  let l = lambertCache.get(m);
+  if (!l) {
+    l = keep(new THREE.MeshLambertMaterial({
+      color: std.color.clone().multiplyScalar(1 - 0.25 * std.metalness),
+      vertexColors: std.vertexColors, map: std.map,
+      emissive: std.emissive, emissiveIntensity: std.emissiveIntensity,
+      transparent: std.transparent, opacity: std.opacity, depthWrite: std.depthWrite,
+      alphaTest: std.alphaTest, side: std.side, fog: std.fog,
+    }));
+    lambertCache.set(m, l);
+  }
+  return l;
 }
 
 // ---------------------------------------------------------------------------
