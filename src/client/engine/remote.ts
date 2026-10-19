@@ -136,12 +136,16 @@ export class RemotePlayer {
     this.rig.head.rotation.x = -this.pitch * 0.8 - fl * 1.5;
     this.rig.gun.rotation.x = -this.pitch;
     this.rig.setCrouch(this.crouch);
-    // respawn pop
+    // respawn pop. Set the scale absolutely: setCrouch owns scale.y, and a
+    // multiplicative pop compounded every frame, which flattened the body.
+    const sy = g.scale.y;
     if (this.spawnT >= 0) {
       const k = Math.min(1, (now - this.spawnT) / POP_MS);
       const s = 0.6 + 0.4 * (1 - (1 - k) * (1 - k)) + Math.sin(k * Math.PI) * 0.06;
-      g.scale.x *= s; g.scale.z *= s; g.scale.y *= s;
+      g.scale.set(s, sy * s, s);
       if (k >= 1) this.spawnT = -1;
+    } else {
+      g.scale.set(1, sy, 1);
     }
     // walking: bob + leg scissor + footsteps
     const moved = Math.hypot(this.p[0] - this.lastP[0], this.p[2] - this.lastP[2]);
