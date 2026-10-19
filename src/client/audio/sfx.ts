@@ -137,18 +137,52 @@ export class Sfx {
     o.start(); o.stop(c.currentTime + dur);
   }
 
+  /** Marker shots: a puff of air and a soft pop, not a bang. */
   shot(w: WeaponId, distance = 0, pan = 0) {
     const att = 1 / (1 + distance * 0.06);
     switch (w) {
-      case 'knife': this.noise(0.08, 0.3 * att, 3000, 800, pan, 2); break;
-      case 'pistol': this.noise(0.12, 0.5 * att, 2500, 200, pan, 3); this.tone(180, 0.08, 0.3 * att, 'square', 0.4, pan); break;
-      case 'rifle': this.noise(0.1, 0.55 * att, 3500, 300, pan, 3); this.tone(140, 0.07, 0.35 * att, 'sawtooth', 0.3, pan); break;
-      case 'shotgun': this.noise(0.25, 0.8 * att, 1800, 80, pan, 2); this.tone(90, 0.18, 0.5 * att, 'square', 0.3, pan); break;
-      case 'sniper': this.noise(0.35, 0.8 * att, 1500, 60, pan, 1.5); this.tone(110, 0.3, 0.45 * att, 'sawtooth', 0.2, pan); break;
+      case 'tag': this.noise(0.1, 0.3 * att, 2600, 500, pan, 2); this.tone(140, 0.05, 0.2 * att, 'triangle', 0.6, pan); break;
+      case 'pistol': this.noise(0.06, 0.38 * att, 2200, 300, pan, 3); this.tone(260, 0.05, 0.2 * att, 'triangle', 0.5, pan); break;
+      case 'semi': this.noise(0.07, 0.45 * att, 2600, 250, pan, 3); this.tone(200, 0.06, 0.28 * att, 'triangle', 0.45, pan); break;
+      case 'auto': this.noise(0.06, 0.4 * att, 2800, 300, pan, 3); this.tone(220, 0.05, 0.22 * att, 'triangle', 0.5, pan); break;
+      case 'pump':
+        this.noise(0.12, 0.55 * att, 1800, 150, pan, 2); this.tone(150, 0.1, 0.35 * att, 'triangle', 0.4, pan);
+        // rack the pump
+        setTimeout(() => this.noise(0.05, 0.22 * att, 4000, 1500, pan, 4), 330);
+        setTimeout(() => this.noise(0.05, 0.26 * att, 3200, 1000, pan, 4), 480);
+        break;
     }
   }
+
+  // ----- grenades -----
+  /** Your own throw: a short whoosh. */
+  nadeThrow(distance = 0, pan = 0) {
+    const att = 1 / (1 + distance * 0.08);
+    this.noise(0.18, 0.25 * att, 1800, 400, pan, 1.5);
+    this.tone(520, 0.14, 0.05 * att, 'sine', 0.6, pan);
+  }
+  /** A grenade hits a wall or the floor. */
+  nadeBounce(distance = 0, pan = 0) {
+    const att = 1 / (1 + distance * 0.1);
+    if (att < 0.08) return;
+    this.tone(330, 0.05, 0.22 * att, 'triangle', 0.6, pan);
+    this.noise(0.03, 0.18 * att, 2500, 600, pan, 4);
+  }
+  /** Paint grenade bursts: a wet thump and a spray. */
+  paintBurst(distance = 0, pan = 0) {
+    const att = 1 / (1 + distance * 0.05);
+    this.tone(120, 0.22, 0.45 * att, 'sine', 0.45, pan);
+    this.noise(0.32, 0.6 * att, 1400, 60, pan, 2);
+    setTimeout(() => this.noise(0.4, 0.22 * att, 5200, 1600, pan, 1.6), 40);
+  }
+  /** Smoke pops and hisses for a couple of seconds. */
+  smokeHiss(distance = 0, pan = 0) {
+    const att = 1 / (1 + distance * 0.05);
+    this.tone(180, 0.08, 0.2 * att, 'square', 0.5, pan);
+    this.noise(2.4, 0.2 * att, 6000, 1800, pan, 0.7);
+  }
   hitmarker(head: boolean) { if (head) this.headshot(); else this.tone(1200, 0.06, 0.25, 'square', 0.8); }
-  /** Short high sting. Game already calls hitmarker(true) when a headshot lands. */
+  /** Short high sting. Game already calls hitmarker(true) when a head mark lands. */
   headshot() {
     this.tone(1568, 0.06, 0.18, 'square', 1.02);
     this.tone(2093, 0.08, 0.14, 'square', 1);

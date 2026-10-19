@@ -7,7 +7,7 @@ import { CHARACTERS } from '../../shared/constants';
 
 interface Sample { t: number; p: Vec3; yaw: number; pitch: number; crouch: boolean; moving: boolean }
 
-const FALL_MS = 380, FADE_FROM = 1900, FADE_MS = 600, POP_MS = 150;
+const FALL_MS = 380, FADE_FROM = 2600, FADE_MS = 600, POP_MS = 150;
 const STRIDE = 2.1;
 const RED = new THREE.Color(0xff2020);
 
@@ -16,7 +16,7 @@ export class RemotePlayer {
   hp: number; kills = 0; deaths = 0; ping = 0; w: WeaponId;
   bot: boolean;
   rig: SkinRig; tag: THREE.Sprite;
-  /** Skin colour, for hit puffs. */
+  /** Skin colour: this player's paint (their shots, splats and the marks they leave). */
   color: string;
   // latest interpolated values
   p: Vec3; yaw = 0; pitch = 0; crouch = false; moving = false;
@@ -75,12 +75,15 @@ export class RemotePlayer {
     this.rig.group.position.set(p[0], p[1], p[2]);
     this.rig.group.rotation.set(0, 0, 0);
     this.rig.group.visible = true;
+    this.rig.group.scale.set(1, 1, 1);
+    this.rig.mark(null);
     this.tag.visible = true;
     this.setOpacity(1);
     this.spawnT = performance.now();
   }
 
-  die(now: number) { this.hp = 0; this.deathT = now; this.tag.visible = false; }
+  /** Marked out: a splat in the marker's colour, then they take a knee and fade. */
+  die(now: number, by?: THREE.ColorRepresentation) { this.hp = 0; this.deathT = now; this.tag.visible = false; if (by !== undefined) this.rig.mark(by); }
 
   /** Brief recoil of the body when hit. */
   flinch(head: boolean) { this.flinchT = performance.now(); this.flinchK = head ? 1 : 0.6; }
@@ -114,12 +117,12 @@ export class RemotePlayer {
     this.updateFlash(now);
     if (this.deathT >= 0) {
       const t = now - this.deathT;
-      // fall backward, overshoot the floor a touch and bounce once
-      let ang: number;
-      if (t < FALL_MS) { const k = t / FALL_MS; ang = k * k * (Math.PI / 2); }
-      else { const k = Math.min(1, (t - FALL_MS) / 260); ang = Math.PI / 2 - Math.sin(k * Math.PI) * 0.16 * (1 - k * 0.5); }
-      g.rotation.x = ang; // +x tips the top toward +Z = backward for a -Z-facing rig
-      g.position.y = this.p[1] + 0.1 * Math.min(1, t / FALL_MS);
+      // marked out: rock back from the hit, then sink to a knee (nobody falls over in paintball)
+      const k = Math.min(1, t / FALL_MS);
+      const rock = Math.sin(Math.min(1, t / 260) * Math.PI) * 0.22;
+      g.rotation.x = rock + 0.08 * k; // +x tips the top toward +Z = backward for a -Z-facing rig
+      g.scale.set(1, 1 - 0.32 * k * k, 1);
+      g.position.y = this.p[1];
       if (t > FADE_FROM) this.setOpacity(Math.max(0, 1 - (t - FADE_FROM) / FADE_MS));
       if (t > FADE_FROM + FADE_MS) g.visible = false;
       return;

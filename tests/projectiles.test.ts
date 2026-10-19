@@ -145,7 +145,7 @@ describe('smoke grenade', () => {
     expect(sm.until).toBe(t + SMOKE.durationMs);
     expect(g.smokes.length).toBe(1);
     // through the cloud: rejected
-    const shoot = (to: Vec3, now: number) => g.handle(a.id, { t: 'shoot', w: 'rifle', o: eyeOf(a), d: [1, 0, 0], hits: [{ id: b.id, part: 'body', point: to }] }, now);
+    const shoot = (to: Vec3, now: number) => g.handle(a.id, { t: 'shoot', w: 'semi', o: eyeOf(a), d: [1, 0, 0], hits: [{ id: b.id, part: 'body', point: to }] }, now);
     let out = shoot([b.p[0], 0.9, b.p[2]], t + 100);
     expect(types(out)).toEqual(['shot']);
     expect(b.hp).toBe(PLAYER.maxHp);
@@ -186,5 +186,34 @@ describe('carrying', () => {
     expect(g.handle(a.id, { t: 'throw', kind: 'paint', o: [a.p[0] + 10, 1.6, a.p[2]], d: [0, 0, -1], power: 1 }, 1000)).toEqual([]);
     a.hp = 0;
     expect(g.handle(a.id, { t: 'throw', kind: 'paint', o: eyeOf(a), d: [0, 0, -1], power: 1 }, 1000)).toEqual([]);
+  });
+});
+
+describe('paintball wave', () => {
+  it('a paint grenade mark-out is tagged nade: paint in the feed', () => {
+    const { g, a, b } = arena();
+    a.p = [-2, 0, 0]; b.p = [3, 0, 3]; b.hp = 1;
+    g.handle(a.id, { t: 'throw', kind: 'paint', o: eyeOf(a), d: [1, 0, 0], power: 0 }, 1000);
+    const pr = g.nades.flying[0];
+    pr.p = [4, GRENADE.radius, 0]; pr.v = [0, 0, 0];
+    const { msgs } = runUntil(g, 1050, m => m.some(x => x.t === 'burst'));
+    const kill = msgs.find(x => x.t === 'kill') as Extract<ServerMsg, { t: 'kill' }>;
+    expect(kill).toBeTruthy();
+    expect(kill.nade).toBe('paint');
+    expect(kill.victim).toBe(b.id);
+    expect(PAINT.damage).toBe(1);
+  });
+
+  it('someone joining mid-match is sent the smoke already in the air', () => {
+    const { g, a } = arena();
+    g.smokes.push({ id: 77, p: [1, 0, 1], until: 9000 }, { id: 78, p: [5, 0, 5], until: 1500 });
+    const r = g.join('Late', 'chef', 2000);
+    if ('error' in r) throw new Error(r.error);
+    const mine = r.out.filter(o => o.to === r.player.id).map(o => o.msg);
+    expect(mine[0].t).toBe('welcome');
+    const smokes = mine.filter(m => m.t === 'smoke') as Array<Extract<ServerMsg, { t: 'smoke' }>>;
+    expect(smokes.map(s => s.id)).toEqual([77]);
+    expect(smokes[0].until).toBe(9000);
+    expect(r.out.some(o => o.to === a.id && o.msg.t === 'smoke')).toBe(false);
   });
 });

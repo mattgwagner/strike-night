@@ -1,4 +1,4 @@
-// Two headless browsers join the same room, one walks and shoots the other.
+// Two headless browsers join the same room, one walks and marks the other out (three body hits).
 // Usage: node e2e/two.mjs http://127.0.0.1:5192 out/   (room is random per run)
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
@@ -25,8 +25,8 @@ const join = async (p, name, skin, w) => {
   await p.evaluate(() => { window.strike.input.locked = true; window.strike.setPaused(false); });
 };
 const a = await mk('A'), b = await mk('B');
-await join(a, 'Alpha', 'bot', 'rifle');
-await join(b, 'Bravo', 'bear', 'shotgun');
+await join(a, 'Alpha', 'bot', 'semi');
+await join(b, 'Bravo', 'bear', 'auto');
 await a.waitForFunction(() => window.strike.remotes.size === 1, null, { timeout: 10000 });
 await b.waitForFunction(() => window.strike.remotes.size === 1, null, { timeout: 10000 });
 const state = p => p.evaluate(() => { const g = window.strike; const r = [...g.remotes.values()][0]; return { id: g.myId, me: g.me.body.p.map(n => +n.toFixed(2)), hp: g.hp, alive: g.me.alive, remote: r && { id: r.id, p: r.p.map(n => +n.toFixed(2)), hp: r.hp, name: r.name }, rtt: Math.round(g.net.rtt), phase: g.match.phase }; });
@@ -58,12 +58,18 @@ console.log('views converged:', await converged(a), await converged(b));
 await b.waitForTimeout(500);
 await a.evaluate(() => { const g = window.strike; const r = [...g.remotes.values()][0]; const dx = r.p[0] - g.me.body.p[0], dz = r.p[2] - g.me.body.p[2]; g.me.yaw = Math.atan2(-dx, -dz); g.me.pitch = -0.05; });
 const hpBefore = (await state(b)).hp;
-await a.mouse.down(); await a.waitForTimeout(1500); await a.mouse.up();
-await a.waitForTimeout(500);
+// three body marks with the semi marker (one ball per click) should take B out: hp 3 -> 2 -> 1 -> 0
+const trail = [];
+for (let i = 0; i < 3; i++) {
+  await a.mouse.down(); await a.waitForTimeout(80); await a.mouse.up();
+  await a.waitForTimeout(700);
+  trail.push((await state(b)).hp);
+}
+console.log('B hp after each click', JSON.stringify(trail));
 const a2 = await state(a), b2 = await state(b);
 console.log('A2', JSON.stringify(a2));
 console.log('B2', JSON.stringify(b2));
-console.log(`B hp ${hpBefore} -> ${b2.hp}; A sees B hp ${a2.remote.hp}`);
+console.log(`B hp ${hpBefore} -> ${b2.hp} (expect 3 -> 0, B marked out: ${!b2.alive}); A sees B hp ${a2.remote.hp}`);
 await a.screenshot({ path: `${out}/a.png` });
 await b.screenshot({ path: `${out}/b.png` });
 console.log(errs.length ? errs.join('\n') : 'no console errors');

@@ -1,19 +1,28 @@
 // DOM HUD. The game pushes state in; nothing here reads the engine directly.
-import { CHARACTERS, WEAPONS, type WeaponId } from '../../shared/constants';
+import { CHARACTERS, ELIM, PLAYER, WEAPONS, type WeaponId } from '../../shared/constants';
 import type { MatchInfo } from '../../shared/protocol';
 
 export interface ScoreRow { id: number; name: string; kills: number; deaths: number; ping: number; team: 0 | 1; me: boolean; bot?: boolean; alive: boolean; skin?: string }
 
 const STREAK_WINDOW = 4000;
 
-// Chunky side-view silhouettes in a 32×32 box. Thin paths turned into arrows at 18px.
+// Chunky side-view silhouettes in a 32×32 box (aria labels carry the names).
 const WEAPON_PATH: Record<WeaponId, string> = {
-  knife: 'M14 2h4l1 12h-2l-1 2h-2l-1-2h-2L14 2zm-3 15h8v2h-2v8h-4v-8h-2v-2z',
-  pistol: 'M4 9h14v4h7v3h-9v1h3v8h-5v-8H8v-1H4V9z',
-  rifle: 'M1 12h7v-2h12v2h10v3h-5v1h-4v5h-3v-5h-4v3H8v-3H1v-4z',
-  shotgun: 'M1 11h8v-3h14v6H10v2H7v4H4v-4H1v-5z',
-  sniper: 'M1 13h8v-1h3V8h8v4h10v3h-6v1h-5v5h-3v-5h-4v2H8v-2H1v-4z',
+  // open hand
+  tag: 'M9 30v-9l-4-6 2-2 4 4V5h3v10h1V3h3v12h1V5h3v11h1V8h3v13l-3 9H9z',
+  // sidearm: body, grip, tank
+  pistol: 'M3 10h17v5h9v3H20v1h-4v8h-5v-8H8v-1H3v-8z',
+  // semi: body, hopper, barrel, tank
+  semi: 'M11 3h8v6h-2v2h13v3H17v3h-4v6H9v-6H1v-6h10V9h-2V3z',
+  // auto: big hopper
+  auto: 'M9 1h12v8h-3v2h12v3H17v3h-4v6H9v-6H1v-6h10V9H9V1z',
+  // pump: long barrel, scope, pump handle
+  pump: 'M11 5h8v4h-2v2h15v3h-6v3h-5v-3h-4v3h-4v6H9v-6H1v-6h10V9h-2V5h2z',
 };
+/** Paint splat (the "marked" verb in the feed). */
+const SPLAT_PATH = 'M16 4c2 0 2 4 4 4s3-3 5-1-1 4 0 6 5 1 5 3-4 2-4 4 3 4 1 6-4-1-6 0-1 4-5 4-2-4-4-4-4 3-6 1 1-4 0-6-5-1-5-3 4-1 4-3-3-4-1-6 4 1 6 0 2-4 5-4zM27 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM4 25a2 2 0 1 1 0 4 2 2 0 0 1 0-4z';
+/** Paint grenade: a ball with a pin. */
+const NADE_PATH = 'M14 2h4v3h-4zM12 5h8v3h-8zM16 8a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-4 6a3 3 0 1 0 0 .1z';
 
 export class Hud {
   root: HTMLElement;
@@ -24,6 +33,7 @@ export class Hud {
   private status: HTMLElement; private scoreboard: HTMLElement; private crosshair: HTMLElement;
   private streak: HTMLElement;
   private hitTimer = 0;
+  private pipColor = '#ff3bd5';
   private streakAt: number[] = [];
   private suppressStreak = false;
   onChat: (text: string) => void = () => {};
@@ -43,8 +53,8 @@ export class Hud {
       <div class="center"></div>
       <div class="chatlog"></div>
       <div class="chatbox"><input maxlength="140" placeholder="say something…" /></div>
-      <div class="bottom-left"><div class="hp">100</div><small>HP</small></div>
-      <div class="bottom-right"><div class="ammo">30 <span>/ 90</span></div><div class="wname">Rifle</div><div class="reloading"></div></div>
+      <div class="bottom-left"><div class="hp" role="img"></div><small>HITS</small></div>
+      <div class="bottom-right"><div class="ammo">20 <span>/ 120</span></div><div class="wname">Semi Marker</div><div class="reloading"></div></div>
       <div class="scoreboard"></div>
       <div class="build">build ${__BUILD__}</div>`;
     parent.appendChild(this.root);
@@ -55,6 +65,17 @@ export class Hud {
     this.center = q('.center'); this.chatlog = q('.chatlog'); this.chatbox = q('.chatbox'); this.chatInput = q('.chatbox input') as HTMLInputElement;
     this.status = q('.status'); this.scoreboard = q('.scoreboard'); this.crosshair = q('.crosshair');
     this.streak = q('.streak');
+    const css = el('style');
+    css.textContent = `
+      .hud .bottom-left .hp { display: flex; gap: 6px; align-items: center; }
+      .hud .bottom-left .hp svg { width: 40px; height: 40px; filter: drop-shadow(0 2px 3px #000); transition: transform 0.15s, opacity 0.2s; }
+      .hud .bottom-left .hp svg.gone { opacity: 0.22; transform: scale(0.8); }
+      .hud .bottom-left .hp.low svg:not(.gone) { animation: pulse 0.8s infinite; }
+      .hud .killfeed .gun .splat { width: 18px; height: 18px; display: block; }
+      .hud .killfeed .gun .nade { width: 18px; height: 18px; display: block; }`;
+    this.root.appendChild(css);
+    this.pipColor = mySkinColor();
+    this.setHp(PLAYER.maxHp);
     this.chatInput.addEventListener('keydown', e => {
       e.stopPropagation();
       if (e.key === 'Enter') { const t = this.chatInput.value.trim(); if (t) this.onChat(t); this.closeChat(); }
@@ -63,10 +84,16 @@ export class Hud {
   }
 
   setStatus(s: string) { this.status.textContent = s; }
+  /** Your paint colour for the hit pips. */
+  setPaintColor(c: string) { this.pipColor = c; this.setHp(Number(this.hp.dataset.hp ?? PLAYER.maxHp)); }
+  /** Hits left as three paint-splat pips. */
   setHp(hp: number) {
     const n = Math.max(0, Math.round(hp));
-    this.hp.textContent = String(n);
-    const low = n > 0 && n <= 30;
+    const pip = (on: boolean) => `<svg viewBox="0 0 32 32" class="${on ? '' : 'gone'}" aria-hidden="true"><path fill="${on ? this.pipColor : '#8a8f9c'}" d="${SPLAT_PATH}"/></svg>`;
+    this.hp.innerHTML = Array.from({ length: PLAYER.maxHp }, (_, i) => pip(i < n)).join('');
+    this.hp.setAttribute('aria-label', `${n} hit${n === 1 ? '' : 's'} left`);
+    this.hp.dataset.hp = String(n);
+    const low = n === 1;
     this.hp.classList.toggle('low', low);
     this.vignette.classList.toggle('low', low);
     if (n <= 0) this.streakAt = [];
@@ -83,18 +110,24 @@ export class Hud {
     const left = Math.max(0, m.endsAt - serverNow);
     const s = Math.ceil(left / 1000);
     this.timer.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-    this.phase.textContent = m.phase === 'warmup' ? 'warmup' : m.phase === 'over' ? 'match over' : m.mode === 'tdm' ? 'team deathmatch' : 'deathmatch';
-    if (m.mode === 'tdm') {
+    const r = m.round;
+    this.phase.textContent = m.phase === 'warmup' ? 'warmup' : m.phase === 'over' ? 'match over'
+      : m.mode === 'elim' ? (r ? `round ${r.n}${r.stage === 'freeze' ? ' · get ready' : r.stage === 'over' ? ' · over' : ''} · first to ${ELIM.roundsToWin}` : 'elimination')
+      : m.mode === 'tdm' ? 'team paintball' : 'free-for-all';
+    if (m.mode === 'tdm' || m.mode === 'elim') {
       this.teams.innerHTML = `<span class="t0">${m.teamScore[0]}</span><span class="t1">${m.teamScore[1]}</span>`;
       this.teams.style.display = '';
       this.teams.children[myTeam].textContent = `${m.teamScore[myTeam]}`;
     } else this.teams.style.display = 'none';
   }
-  kill(killer: string, victim: string, w: WeaponId, headshot: boolean, involvesMe: boolean) {
+  /** Feed row: "<marker> [marker or grenade icon][splat] <marked>". */
+  kill(killer: string, victim: string, w: WeaponId, headshot: boolean, involvesMe: boolean, nade?: 'paint', color?: string) {
     const d = el('div', [involvesMe ? 'me' : '', headshot ? 'hs-row' : ''].filter(Boolean).join(' '));
-    const gun = WEAPONS[w].name;
-    d.setAttribute('aria-label', `${killer} ${gun}${headshot ? ' headshot' : ''} ${victim}`);
-    d.innerHTML = `<span class="who">${esc(killer)}</span> <span class="gun${headshot ? ' hs' : ''}">${weaponIcon(w)}${headshot ? '<em>HS</em>' : ''}</span> <span class="who">${esc(victim)}</span>`;
+    const how = nade ? 'paint grenade' : WEAPONS[w].name;
+    d.setAttribute('aria-label', `${killer} marked ${victim} with ${how}${headshot ? ', head mark' : ''}`);
+    const icon = nade ? `<svg class="nade" viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="${NADE_PATH}"/></svg>` : weaponIcon(w);
+    const splat = `<svg class="splat" viewBox="0 0 32 32" aria-hidden="true"><path fill="${color ?? '#ff3bd5'}" d="${SPLAT_PATH}"/></svg>`;
+    d.innerHTML = `<span class="who">${esc(killer)}</span> <span class="gun${headshot ? ' hs' : ''}">${icon}${splat}${headshot ? '<em>HEAD</em>' : ''}</span> <span class="who">${esc(victim)}</span>`;
     this.feed.prepend(d);
     while (this.feed.children.length > 6) this.feed.lastChild?.remove();
     setTimeout(() => d.remove(), 6000);
@@ -110,7 +143,7 @@ export class Hud {
   }
   hurt() { this.vignette.classList.add('hurt'); requestAnimationFrame(() => requestAnimationFrame(() => this.vignette.classList.remove('hurt'))); }
   setCenter(big: string, sub = '') {
-    if (/^(headshot by|killed by)\b/i.test(big.trim())) {
+    if (/^(head mark by|marked by)\b/i.test(big.trim())) {
       this.suppressStreak = true;
       this.streakAt = [];
       this.streak.classList.remove('show');
@@ -129,16 +162,20 @@ export class Hud {
   showScoreboard(show: boolean, rows?: ScoreRow[], match?: MatchInfo) {
     this.scoreboard.classList.toggle('show', show);
     if (!show || !rows) return;
-    const sorted = [...rows].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-    const mvpId = sorted[0] && sorted[0].kills > 0 ? sorted[0].id : -1;
-    const title = match?.phase === 'over' ? 'MATCH OVER' : match?.mode === 'tdm' ? 'TEAM DEATHMATCH' : 'DEATHMATCH';
-    const teams = match?.mode === 'tdm'
-      ? `<div class="tscores"><span class="t0">NIGHT ${match.teamScore[0]}</span><span class="t1">DAY ${match.teamScore[1]}</span></div>`
+    const elim = match?.mode === 'elim';
+    const teamed = match?.mode === 'tdm' || elim;
+    // elimination groups by side so you can see who is still in
+    const sorted = [...rows].sort((a, b) => (elim ? a.team - b.team : 0) || b.kills - a.kills || a.deaths - b.deaths);
+    const best = [...rows].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)[0];
+    const mvpId = best && best.kills > 0 ? best.id : -1;
+    const title = match?.phase === 'over' ? 'MATCH OVER' : elim ? `ELIMINATION${match?.round ? ` · ROUND ${match.round.n}` : ''}` : match?.mode === 'tdm' ? 'TEAM PAINTBALL' : 'FREE-FOR-ALL';
+    const teams = teamed && match
+      ? `<div class="tscores"><span class="t0">NIGHT ${match.teamScore[0]}</span><span class="t1">DAY ${match.teamScore[1]}</span></div>${elim ? `<div class="tsub" style="text-align:center;font-size:11px;letter-spacing:0.14em;opacity:0.65;margin-top:2px">ROUNDS WON · FIRST TO ${ELIM.roundsToWin}</div>` : ''}`
       : '';
-    const podium = match?.phase === 'over' ? renderPodium(sorted) : '';
+    const podium = match?.phase === 'over' ? renderPodium([...rows].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)) : '';
     this.scoreboard.innerHTML = `<h2>${title}</h2>${teams}${podium}
-      <table><tr><th>Player</th><th class="num">K</th><th class="num">D</th><th class="num">K/D</th><th class="num">Ping</th></tr>
-      ${sorted.map(r => `<tr class="${r.me ? 'me' : ''} ${match?.mode === 'tdm' ? 't' + r.team : ''}"><td><i class="pip t${r.team}"></i><span class="nm t${r.team}">${esc(r.name)}</span>${r.bot ? ' <span class="tag bot">BOT</span>' : ''}${r.alive ? '' : ' <span class="tag dead">OUT</span>'}${r.id === mvpId ? ' <span class="tag mvp">MVP</span>' : ''}</td><td class="num">${r.kills}</td><td class="num">${r.deaths}</td><td class="num">${(r.kills / Math.max(1, r.deaths)).toFixed(2)}</td><td class="num">${r.ping}</td></tr>`).join('')}</table>`;
+      <table><tr><th>Player</th><th class="num">Marks</th><th class="num">Marked</th>${elim ? '' : '<th class="num">Ratio</th>'}<th class="num">Ping</th></tr>
+      ${sorted.map(r => `<tr class="${r.me ? 'me' : ''} ${teamed ? 't' + r.team : ''}"><td><i class="pip t${r.team}"></i><span class="nm t${r.team}">${esc(r.name)}</span>${r.bot ? ' <span class="tag bot">BOT</span>' : ''}${r.alive ? '' : ' <span class="tag dead">OUT</span>'}${r.id === mvpId ? ' <span class="tag mvp">MVP</span>' : ''}</td><td class="num">${r.kills}</td><td class="num">${r.deaths}</td>${elim ? '' : `<td class="num">${(r.kills / Math.max(1, r.deaths)).toFixed(2)}</td>`}<td class="num">${r.ping}</td></tr>`).join('')}</table>`;
   }
 
   // ----- feel workstream additions (scope, dynamic crosshair, damage direction) -----
@@ -165,7 +202,7 @@ export class Hud {
     const dmg = [0, 1, 2, 3].map(() => { const d = el('div', 'feel-dmg'); this.root.appendChild(d); return d; });
     return (this.feelEls = { scope, dmg, dmgNext: 0, spread: -1 });
   }
-  /** Sniper scope overlay on/off (also hides the crosshair). */
+  /** Pump-marker scope overlay on/off (also hides the crosshair). */
   setScope(on: boolean) {
     const f = this.feel();
     f.scope.classList.toggle('on', on);
@@ -194,7 +231,7 @@ export class Hud {
     this.streakAt = this.streakAt.filter(t => now - t < STREAK_WINDOW);
     this.streakAt.push(now);
     const n = this.streakAt.length;
-    const label = n >= 4 ? 'RAMPAGE' : n === 3 ? 'TRIPLE KILL' : n === 2 ? 'DOUBLE KILL' : '';
+    const label = n >= 4 ? 'PAINT STORM' : n === 3 ? 'TRIPLE MARK' : n === 2 ? 'DOUBLE MARK' : '';
     if (!label) return;
     this.streak.textContent = label;
     this.streak.classList.remove('show');
@@ -219,6 +256,15 @@ export class Hud {
 
 function weaponIcon(w: WeaponId): string {
   return `<svg class="wicon" viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="${WEAPON_PATH[w]}"/></svg>`;
+}
+
+function mySkinColor(): string {
+  try {
+    const saved = JSON.parse(localStorage.getItem('strike-night') ?? '{}') as { skin?: string };
+    const def = CHARACTERS.find(c => c.id === saved.skin);
+    if (def) return def.color;
+  } catch { /* ignore bad prefs */ }
+  return '#ff3bd5';
 }
 
 function characterColor(row: ScoreRow): string {
@@ -251,7 +297,7 @@ function renderPodium(sorted: ScoreRow[]): string {
     return `<div class="pod p${s.place}" style="--c:${characterColor(s.row)};--team:${team}">
       ${s.place === 1 ? '<span class="mvp">MVP</span>' : `<span class="place">${s.place}</span>`}
       <span class="pname">${esc(s.row.name)}</span>
-      <span class="pk">${s.row.kills} K</span>
+      <span class="pk">${s.row.kills} marks</span>
       <i></i>
     </div>`;
   }).join('')}</div>`;

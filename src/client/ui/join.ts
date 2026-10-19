@@ -1,11 +1,17 @@
-// Join screen: name, character, primary weapon, room code.
+// Join screen: name, character, primary marker, room code.
 import * as THREE from 'three';
-import { CHARACTERS, PRIMARY_WEAPONS, WEAPONS, type WeaponId } from '../../shared/constants';
+import { CHARACTERS, DEFAULT_PRIMARY, PRIMARY_WEAPONS, WEAPONS, type WeaponId } from '../../shared/constants';
 import { buildSkin } from '../world/skins';
 import { el, esc } from './hud';
 
 export interface JoinChoice { name: string; skin: string; primary: WeaponId; room: string }
 export interface JoinDefaults extends Partial<JoinChoice> { rooms?: string[] }
+
+const MARKER_BLURB: Partial<Record<WeaponId, string>> = {
+  semi: 'accurate · 5 a second',
+  auto: 'hold it down · 10 a second',
+  pump: 'scoped · one ball, you\'re out',
+};
 
 const ROOM_A = ['night', 'bot', 'slug', 'bear', 'ghost', 'astro', 'pizza', 'spin', 'cage', 'dugout', 'home', 'rally'];
 const ROOM_B = ['pit', 'den', 'yard', 'match', 'lane', 'box', 'run', 'out', 'inning', 'arena'];
@@ -29,7 +35,7 @@ export function randomRoom(avoid = ''): string {
 export function showJoin(parent: HTMLElement, defaults: JoinDefaults): Promise<JoinChoice> {
   return new Promise(resolve => {
     const knownSkin = CHARACTERS.some(c => c.id === defaults.skin) ? defaults.skin! : CHARACTERS[0].id;
-    const knownWeapon = defaults.primary && PRIMARY_WEAPONS.includes(defaults.primary) ? defaults.primary : 'rifle';
+    const knownWeapon = defaults.primary && PRIMARY_WEAPONS.includes(defaults.primary) ? defaults.primary : DEFAULT_PRIMARY;
     let skin = knownSkin;
     let primary: WeaponId = knownWeapon;
     const recent = [...new Set((defaults.rooms ?? []).map(cleanRoom))].slice(0, 5);
@@ -40,7 +46,7 @@ export function showJoin(parent: HTMLElement, defaults: JoinDefaults): Promise<J
       ${coarse ? '<div class="touch">This game needs a keyboard and a mouse.</div>' : ''}
       <header class="brand">
         <h1>STRIKE <span>NIGHT</span></h1>
-        <p class="tag">family deathmatch · browser · no install</p>
+        <p class="tag">family paintball · browser · no install</p>
       </header>
       <div class="stage">
         <canvas aria-hidden="true"></canvas>
@@ -51,8 +57,8 @@ export function showJoin(parent: HTMLElement, defaults: JoinDefaults): Promise<J
         <input type="text" id="name" maxlength="14" placeholder="Name" autocomplete="nickname" value="${esc(defaults.name ?? '')}" />
         <label>Character</label>
         <div class="skins">${CHARACTERS.map(c => `<button type="button" class="skin ${c.id === skin ? 'sel' : ''}" data-skin="${c.id}" style="--skin:${c.color}"><b>${esc(c.name)}</b></button>`).join('')}</div>
-        <label>Primary weapon</label>
-        <div class="weapons">${PRIMARY_WEAPONS.map(w => `<button type="button" class="weapon ${w === primary ? 'sel' : ''}" data-w="${w}">${WEAPONS[w].name}</button>`).join('')}</div>
+        <label>Marker</label>
+        <div class="weapons">${PRIMARY_WEAPONS.map(w => `<button type="button" class="weapon ${w === primary ? 'sel' : ''}" data-w="${w}">${WEAPONS[w].name}<small style="display:block;font-weight:600;font-size:11px;opacity:0.7;margin-top:2px">${MARKER_BLURB[w] ?? ''}</small></button>`).join('')}</div>
         <label for="room">Room</label>
         <div class="room"><input type="text" id="room" maxlength="24" spellcheck="false" autocapitalize="off" value="${esc(defaults.room ?? 'family')}" /></div>
         <p class="invite"></p>
@@ -63,7 +69,7 @@ export function showJoin(parent: HTMLElement, defaults: JoinDefaults): Promise<J
         <div class="recent"${recent.length ? '' : ' hidden'}>${recent.map(r => `<button type="button" class="chip" data-room="${esc(r)}">${esc(r)}</button>`).join('')}</div>
         <button type="button" class="go">PLAY</button>
       </form>
-      <div class="howto"><kbd>WASD</kbd> move · <kbd>Mouse</kbd> aim · <kbd>Click</kbd> shoot · first to 30, or best when time runs out · <kbd>Enter</kbd> plays</div>`;
+      <div class="howto"><kbd>WASD</kbd> move · <kbd>Mouse</kbd> aim · <kbd>Click</kbd> shoot · 3 hits and you're out · first to 30 marks, or best when time runs out · <kbd>Enter</kbd> plays</div>`;
     parent.appendChild(root);
 
     const name = root.querySelector('#name') as HTMLInputElement;

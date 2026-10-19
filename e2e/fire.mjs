@@ -1,6 +1,6 @@
 // Visual check for the feel workstream: screenshots mid-burst (mouse held),
 // wall impacts/decals, the victim's view (remote muzzle flash, damage arc,
-// kill cam) and the sniper scope. Usage: node e2e/fire.mjs <url> [e2e/out-fx]
+// marked cam) and the pump scope. Usage: node e2e/fire.mjs <url> [e2e/out-fx]
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 const require = createRequire(import.meta.url);
@@ -13,6 +13,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? 
 const errs = [];
 const mk = async (tag) => {
   const p = await browser.newPage({ viewport: { width: 960, height: 600 } });
+  p.setDefaultTimeout(120000); // the box is often under heavy load
   p.on('console', m => { if (m.type() === 'error') errs.push(`${tag}: ${m.text().slice(0, 300)}`); });
   p.on('pageerror', e => errs.push(`${tag}: ${e.message}`));
   return p;
@@ -35,8 +36,8 @@ const aimAt = (p, pitch = -0.05) => p.evaluate((pitch) => { const g = window.str
 const shot = (p, name) => p.screenshot({ path: `${out}/${name}.png` }).then(() => console.log('saved', `${out}/${name}.png`));
 
 const a = await mk('A'), b = await mk('B');
-await join(a, 'Alpha', 'bot', 'rifle');
-await join(b, 'Bravo', 'chef', 'shotgun');
+await join(a, 'Alpha', 'bot', 'auto');
+await join(b, 'Bravo', 'chef', 'semi');
 await a.waitForFunction(() => window.strike.remotes.size === 1, null, { timeout: 10000 });
 await b.waitForFunction(() => window.strike.remotes.size === 1, null, { timeout: 10000 });
 // warmup -> live respawns everyone; wait it out so positions hold
@@ -65,14 +66,14 @@ await b.evaluate(() => { window.strike.me.yaw -= 0.6; });
 await a.mouse.down();
 await a.waitForTimeout(500);
 await Promise.all([shot(a, 'a-player-burst-held'), shot(b, 'b-hit-sees-a-firing')]);
-await b.waitForFunction(() => !window.strike.me.alive, null, { timeout: 4000 }).catch(() => console.log('B did not die'));
+await b.waitForFunction(() => !window.strike.me.alive, null, { timeout: 4000 }).catch(() => console.log('B was not marked out'));
 await a.mouse.up();
 await b.waitForTimeout(1200);
-await shot(b, 'b-killcam');
-await shot(a, 'a-body-falling');
+await shot(b, 'b-marked-cam');
+await shot(a, 'a-sees-b-marked');
 
-// 3) sniper scope
-await a.evaluate(() => { const g = window.strike; g.weapons.setPrimary('sniper'); g.weapons.current = 'sniper'; g.me.weapon = 'sniper'; g.viewmodel.setWeapon('sniper'); g.input.aim = true; g.me.yaw = Math.PI / 2 - 0.6; g.me.pitch = 0; });
+// 3) pump marker scope
+await a.evaluate(() => { const g = window.strike; g.weapons.setPrimary('pump'); g.weapons.current = 'pump'; g.me.weapon = 'pump'; g.viewmodel.setWeapon('pump'); g.input.aim = true; g.me.yaw = Math.PI / 2 - 0.6; g.me.pitch = 0; });
 await a.waitForTimeout(1200);
 await shot(a, 'a-scoped');
 await a.mouse.down(); await a.waitForTimeout(250); await a.mouse.up();
@@ -80,7 +81,7 @@ await a.waitForTimeout(150);
 await shot(a, 'a-scoped-after-shot');
 await a.evaluate(() => { window.strike.input.aim = false; });
 await a.waitForTimeout(800);
-await shot(a, 'a-sniper-unscoped');
+await shot(a, 'a-pump-unscoped');
 
 console.log(errs.length ? errs.join('\n') : 'no console errors');
 await browser.close();

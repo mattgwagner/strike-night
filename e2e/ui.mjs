@@ -21,11 +21,11 @@ page.on('console', m => {
 page.on('pageerror', e => errs.push(e.message));
 await page.addInitScript(() => {
   localStorage.setItem('strike-night', JSON.stringify({
-    name: 'Alpha', skin: 'bot', primary: 'rifle', sens: 0.0022, fov: 90, volume: 0.5, ambient: true,
+    name: 'Alpha', skin: 'bot', primary: 'semi', sens: 0.0022, fov: 90, volume: 0.5, ambient: true,
     rooms: ['night-pit', 'family', 'slug-yard'],
   }));
 });
-await page.goto(`${url}/?room=${room}&name=Alpha&skin=bot&w=rifle`);
+await page.goto(`${url}/?room=${room}&name=Alpha&skin=bot&w=semi`);
 await page.waitForSelector('button.go');
 await page.waitForSelector('.join canvas');
 await page.waitForTimeout(900);
@@ -45,11 +45,11 @@ await page.evaluate(() => { window.strike.input.locked = true; window.strike.set
 await page.waitForTimeout(600);
 await page.evaluate(() => {
   const h = window.strike.hud;
-  h.kill('Alpha', 'Bravo', 'rifle', true, true);
-  h.kill('Alpha', 'Charlie', 'shotgun', false, true);
-  h.kill('Delta', 'Echo', 'sniper', true, false);
-  h.kill('Foxtrot', 'Alpha', 'knife', false, false);
-  h.setHp(22);
+  h.kill('Alpha', 'Bravo', 'semi', true, true, undefined, '#ff6a00');
+  h.kill('Alpha', 'Charlie', 'auto', false, true, 'paint', '#ff6a00');
+  h.kill('Delta', 'Echo', 'pump', false, false, undefined, '#c9c9ff');
+  h.kill('Foxtrot', 'Alpha', 'tag', false, false, undefined, '#e03c3c');
+  h.setHp(1);
 });
 await page.waitForTimeout(280);
 await page.screenshot({ path: `${out}/hud.png` });
@@ -70,6 +70,27 @@ await page.evaluate(() => {
 });
 await page.waitForSelector('.scoreboard.show .podium');
 await page.screenshot({ path: `${out}/scoreboard.png` });
+
+// elimination scoreboard mid-round: rounds won, marks / marked, who is out
+await page.evaluate(() => {
+  const g = window.strike;
+  g.hud.showScoreboard(true, [
+    { id: 1, name: 'Alpha', kills: 4, deaths: 2, ping: 22, team: 0, me: true, alive: true, skin: 'bot' },
+    { id: 2, name: 'Bravo', kills: 3, deaths: 3, ping: 30, team: 1, me: false, alive: false, skin: 'slugger' },
+    { id: 3, name: 'Charlie', kills: 1, deaths: 4, ping: 41, team: 0, me: false, alive: false, skin: 'bear' },
+    { id: 4, name: 'Delta', kills: 5, deaths: 1, ping: 28, team: 1, me: false, alive: true, bot: true, skin: 'ghost' },
+  ], { mode: 'elim', phase: 'live', endsAt: 0, teamScore: [4, 3], round: { n: 8, stage: 'live' } });
+});
+await page.waitForFunction(() => document.querySelector('.scoreboard.show h2')?.textContent?.includes('ELIMINATION'));
+const elimHead = await page.locator('.scoreboard th').allTextContents();
+if (!elimHead.includes('Marks') || !elimHead.includes('Marked') || elimHead.some(t => /K\/D|Ratio/.test(t))) errs.push('elim scoreboard columns: ' + elimHead.join(','));
+await page.screenshot({ path: `${out}/scoreboard-elim.png` });
+
+// pause menu offers elimination
+const modes = await page.locator('.paused select option').evaluateAll(os => os.map(o => o.value));
+if (!modes.includes('elim')) errs.push('pause menu has no elim mode: ' + modes.join(','));
+const tagline = await page.evaluate(() => document.title + '|' + (document.querySelector('.join .tag')?.textContent ?? 'gone'));
+console.log('modes', modes.join(','), tagline);
 
 console.log(errs.length ? errs.join('\n') : 'no console errors');
 await browser.close();

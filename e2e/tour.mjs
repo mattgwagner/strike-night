@@ -29,7 +29,7 @@ const errs = [];
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('console', m => { if (m.type() === 'error') errs.push(m.text().slice(0, 300)); });
 page.on('pageerror', e => errs.push(e.message));
-await page.goto(`${url}/?room=tour-${Math.random().toString(36).slice(2, 7)}&name=Tour&skin=astro&w=rifle`);
+await page.goto(`${url}/?room=tour-${Math.random().toString(36).slice(2, 7)}&name=Tour&skin=astro&w=semi`);
 await page.waitForSelector('button.go');
 await page.click('button.go');
 await page.waitForFunction(() => window.strike && window.strike.myId > 0, null, { timeout: 20000 });

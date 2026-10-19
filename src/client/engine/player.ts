@@ -14,7 +14,7 @@ export class LocalPlayer {
   body: Body = { p: [0, 0, 0], v: [0, 0, 0], crouch: false, ground: true };
   yaw = 0; pitch = 0;
   alive = true;
-  weapon: WeaponId = 'rifle';
+  weapon: WeaponId = 'semi';
   moving = false;
   speedFrac = 0;      // 0..1 how fast we're moving relative to walk speed
   bobPhase = 0;

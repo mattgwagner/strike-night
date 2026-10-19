@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Game } from '../src/worker/game';
-import { MATCH, PLAYER, WEAPONS } from '../src/shared/constants';
+import { MATCH, PLAYER, WEAPONS, type WeaponId } from '../src/shared/constants';
 import type { Vec3 } from '../src/shared/protocol';
 
 function twoPlayers(now = 1000) {
@@ -13,7 +13,7 @@ function twoPlayers(now = 1000) {
   return { g, a: a.player, b: b.player };
 }
 
-function shotAt(g: Game, from: number, to: { id: number; p: Vec3 }, part: 'head' | 'body', now: number, w: 'rifle' | 'sniper' | 'knife' = 'rifle') {
+function shotAt(g: Game, from: number, to: { id: number; p: Vec3 }, part: 'head' | 'body', now: number, w: WeaponId = 'semi') {
   const s = g.players.get(from)!;
   const o: Vec3 = [s.p[0], s.p[1] + PLAYER.eyeHeight, s.p[2]];
   const y = part === 'head' ? PLAYER.height - 0.1 : 0.9;
@@ -32,11 +32,11 @@ describe('Game', () => {
     expect('out' in r && r.out.map(o => o.msg.t)).toEqual(['welcome', 'join']);
   });
 
-  it('body shot does base damage, headshot multiplies, kill awards score', () => {
+  it('body mark takes one hit, head mark two, marked out awards a mark', () => {
     const { g, b } = twoPlayers();
     let out = shotAt(g, 1, b, 'body', 2000);
     expect(out.map(o => o.msg.t)).toEqual(['shot', 'hit']);
-    expect(b.hp).toBe(PLAYER.maxHp - WEAPONS.rifle.damage);
+    expect(b.hp).toBe(2);
     out = shotAt(g, 1, b, 'head', 3000);
     expect(b.hp).toBe(0);
     expect(out.map(o => o.msg.t)).toEqual(['shot', 'hit', 'kill', 'score']);
@@ -49,12 +49,12 @@ describe('Game', () => {
     shotAt(g, 1, b, 'body', 2000);
     const out = shotAt(g, 1, b, 'body', 2010);
     expect(out).toEqual([]);
-    expect(b.hp).toBe(PLAYER.maxHp - WEAPONS.rifle.damage);
+    expect(b.hp).toBe(PLAYER.maxHp - WEAPONS.semi.damage);
   });
 
   it('rejects hits whose claimed point is far from the target', () => {
     const { g, b } = twoPlayers();
-    const out = g.handle(1, { t: 'shoot', w: 'rifle', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 2, part: 'body', point: [-16, 1, 5] }] }, 2000);
+    const out = g.handle(1, { t: 'shoot', w: 'semi', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 2, part: 'body', point: [-16, 1, 5] }] }, 2000);
     expect(out.map(o => o.msg.t)).toEqual(['shot']);
     expect(b.hp).toBe(PLAYER.maxHp);
   });
@@ -63,23 +63,24 @@ describe('Game', () => {
     const { g, a, b } = twoPlayers();
     // target behind the mid cover wall at z=-12 (y 0..2.2); shooter in front of it
     a.p = [0, 0, -8]; b.p = [0, 0, -16];
-    const out = g.handle(1, { t: 'shoot', w: 'rifle', o: [0, PLAYER.eyeHeight, -8], d: [0, 0, -1], hits: [{ id: 2, part: 'body', point: [0, 0.9, -16] }] }, 2000);
+    const out = g.handle(1, { t: 'shoot', w: 'semi', o: [0, PLAYER.eyeHeight, -8], d: [0, 0, -1], hits: [{ id: 2, part: 'body', point: [0, 0.9, -16] }] }, 2000);
     expect(out.map(o => o.msg.t)).toEqual(['shot']);
     expect(b.hp).toBe(PLAYER.maxHp);
   });
 
-  it('knife only reaches 2.2m', () => {
+  it('hand tag only reaches 2.2m and marks out instantly', () => {
     const { g, b } = twoPlayers();
-    expect(shotAt(g, 1, b, 'body', 2000, 'knife').map(o => o.msg.t)).toEqual(['shot']);
+    expect(shotAt(g, 1, b, 'body', 2000, 'tag').map(o => o.msg.t)).toEqual(['shot']);
     b.p = [-24.5, 0, 0];
-    expect(shotAt(g, 1, b, 'body', 3000, 'knife').map(o => o.msg.t)).toEqual(['shot', 'hit']);
+    expect(shotAt(g, 1, b, 'body', 3000, 'tag').map(o => o.msg.t)).toEqual(['shot', 'hit', 'kill', 'score']);
+    expect(b.hp).toBe(0);
   });
 
   it('dead players cannot shoot and respawn after the delay', () => {
     const { g, b } = twoPlayers();
-    shotAt(g, 1, b, 'head', 2000, 'sniper');
+    shotAt(g, 1, b, 'head', 2000, 'pump');
     expect(b.hp).toBe(0);
-    expect(g.handle(2, { t: 'shoot', w: 'rifle', o: [-16, 1.6, 0], d: [-1, 0, 0], hits: [] }, 2100)).toEqual([]);
+    expect(g.handle(2, { t: 'shoot', w: 'semi', o: [-16, 1.6, 0], d: [-1, 0, 0], hits: [] }, 2100)).toEqual([]);
     expect(g.handle(2, { t: 'respawn' }, 2500)).toEqual([]);
     const out = g.handle(2, { t: 'respawn' }, 2000 + PLAYER.respawnMs);
     expect(out[0].msg.t).toBe('spawn');
@@ -107,7 +108,7 @@ describe('Game', () => {
     g.tick(MATCH.warmupMs + 1);
     a.kills = MATCH.killLimit - 1;
     a.p = [-26, 0, 0]; b.p = [-16, 0, 0];
-    shotAt(g, 1, b, 'head', MATCH.warmupMs + 500, 'sniper');
+    shotAt(g, 1, b, 'head', MATCH.warmupMs + 500, 'pump');
     expect(g.match.phase).toBe('over');
   });
 
@@ -116,9 +117,9 @@ describe('Game', () => {
     const ids = ['A', 'B', 'C', 'D'].map(n => { const r = g.join(n, 'bot', 0); return 'player' in r ? r.player : null!; });
     expect(ids.map(p => p.team)).toEqual([0, 1, 0, 1]);
     ids[0].p = [-26, 0, 0]; ids[2].p = [-16, 0, 0]; ids[1].p = [-21, 0, 0];
-    const friendly = g.handle(1, { t: 'shoot', w: 'rifle', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 3, part: 'body', point: [-16, 0.9, 0] }] }, 1000);
+    const friendly = g.handle(1, { t: 'shoot', w: 'semi', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 3, part: 'body', point: [-16, 0.9, 0] }] }, 1000);
     expect(friendly.map(o => o.msg.t)).toEqual(['shot']);
-    g.handle(1, { t: 'shoot', w: 'sniper', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 2, part: 'head', point: [-21, 1.7, 0] }] }, 3000);
+    g.handle(1, { t: 'shoot', w: 'pump', o: [-26, PLAYER.eyeHeight, 0], d: [1, 0, 0], hits: [{ id: 2, part: 'head', point: [-21, 1.7, 0] }] }, 3000);
     expect(g.match.teamScore).toEqual([1, 0]);
   });
 
@@ -129,5 +130,52 @@ describe('Game', () => {
       const s = g.pickSpawn(0, 2);
       expect(Math.hypot(s.p[0] - a.p[0], s.p[2] - a.p[2])).toBeGreaterThan(20);
     }
+  });
+});
+
+describe('hits model', () => {
+  it('three body marks with the semi take you out', () => {
+    expect(PLAYER.maxHp).toBe(3);
+    const { g, b } = twoPlayers();
+    const hp: number[] = [];
+    for (let i = 0; i < 3; i++) { shotAt(g, 1, b, 'body', 2000 + i * 500, 'semi'); hp.push(b.hp); }
+    expect(hp).toEqual([2, 1, 0]);
+    expect(b.deaths).toBe(1);
+  });
+
+  it('auto and sidearm body marks are one hit too', () => {
+    const { g, b } = twoPlayers();
+    shotAt(g, 1, b, 'body', 2000, 'auto');
+    expect(b.hp).toBe(2);
+    shotAt(g, 1, b, 'body', 3000, 'pistol');
+    expect(b.hp).toBe(1);
+  });
+
+  it('two head marks take you out (2 hits each, clamped at 0)', () => {
+    const { g, b } = twoPlayers();
+    const out = shotAt(g, 1, b, 'head', 2000, 'semi');
+    expect(b.hp).toBe(1);
+    const hit = out.find(o => o.msg.t === 'hit')!.msg;
+    expect(hit.t === 'hit' && hit.dmg).toBe(2);
+    shotAt(g, 1, b, 'head', 3000, 'semi');
+    expect(b.hp).toBe(0);
+  });
+
+  it('the pump marks out in one, body or head', () => {
+    for (const part of ['body', 'head'] as const) {
+      const { g, b } = twoPlayers();
+      const out = shotAt(g, 1, b, part, 2000, 'pump');
+      expect(b.hp).toBe(0);
+      const k = out.find(o => o.msg.t === 'kill')!.msg;
+      expect(k.t === 'kill' && k.w).toBe('pump');
+      expect(k.t === 'kill' && k.nade).toBeUndefined();
+    }
+  });
+
+  it('respawn restores all three hits', () => {
+    const { g, b } = twoPlayers();
+    shotAt(g, 1, b, 'body', 2000, 'pump');
+    g.handle(2, { t: 'respawn' }, 2000 + PLAYER.respawnMs);
+    expect(b.hp).toBe(3);
   });
 });

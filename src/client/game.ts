@@ -1,10 +1,11 @@
 // Orchestrator: renderer, local player, weapons, remotes, HUD, audio, net.
 import * as THREE from 'three';
-import { CHARACTERS, PLAYER, WEAPONS, TICK_MS, type WeaponId } from '../shared/constants';
+import { CHARACTERS, ELIM, MATCH, PLAYER, WEAPONS, TICK_MS, type WeaponId } from '../shared/constants';
 import { MAPS } from '../shared/map';
-import { bulletBoxes, forward, rayWorld, solidBoxes } from '../shared/physics';
+import { bulletBoxes, rayWorld, solidBoxes } from '../shared/physics';
 import type { MapBox } from '../shared/map';
-import type { MatchInfo, PlayerSnapshot, ServerMsg, Vec3 } from '../shared/protocol';
+import { isTeamMode, type MatchInfo, type PlayerSnapshot, type ServerMsg, type Vec3 } from '../shared/protocol';
+import { smokeBlocks } from '../shared/projectiles';
 import { Sfx } from './audio/sfx';
 import { Input, DEFAULT_BINDINGS } from './engine/input';
 import { LocalPlayer } from './engine/player';
@@ -55,6 +56,13 @@ export class Game {
   private deathPos: Vec3 = [0, 0, 0];
   private deathYaw = 0;
   private orbitStart = 0;
+  /** Elimination spectating: the teammate the marked cam follows (null = orbit where you were marked). */
+  private specId: number | null = null;
+  private orbitYaw = 0;
+  /** Your paint colour (skin colour): your shots, splats and the marks you leave. */
+  myColor: string;
+  /** Fired when players join or leave (the pause menu reads the bot count from this). */
+  onRoster: () => void = () => {};
   private tmpV = new THREE.Vector3();
   private lastSend = 0;
   private lastT = performance.now();
@@ -79,6 +87,7 @@ export class Game {
     this.bullets = bulletBoxes(map.boxes);
     this.fx = new Fx(this.scene, this.bullets);
     this.skin = choice.skin;
+    this.myColor = (CHARACTERS.find(c => c.id === choice.skin) ?? CHARACTERS[0]).color;
     this.fx.warm(this.renderer, this.camera);
     this.input = new Input(this.renderer.domElement);
     this.me = new LocalPlayer(this.input, solidBoxes(map.boxes));
@@ -86,6 +95,7 @@ export class Game {
     this.weapons.setPrimary(choice.primary);
     this.weapons.refill();
     this.hud = new Hud(root);
+    this.hud.setPaintColor(this.myColor);
     this.hud.onChat = text => this.net.send({ t: 'chat', text });
     this.net = new Net(choice.room);
     this.net.onStatus = s => this.hud.setStatus(s === 'open' ? `room ${choice.room}` : s === 'connecting' ? 'connecting…' : 'disconnected — retrying');
@@ -133,12 +143,13 @@ export class Game {
         this.myId = m.id; this.match = m.match;
         for (const r of this.remotes.values()) r.dispose(this.scene);
         this.remotes.clear();
-        for (const p of m.players) { this.names.set(p.id, p.name); this.scores.set(p.id, { kills: p.kills, deaths: p.deaths, ping: p.ping, team: p.team }); if (p.id === m.id) { this.myTeam = p.team; this.spawnMe(p.p, p.yaw); } else this.addRemote(p); }
+        for (const p of m.players) { this.names.set(p.id, p.name); this.scores.set(p.id, { kills: p.kills, deaths: p.deaths, ping: p.ping, team: p.team }); if (p.id === m.id) { this.myTeam = p.team; this.spawnMe(p.p, p.yaw); if (p.hp <= 0) this.sitOut(p.p, p.yaw); } else this.addRemote(p); }
         this.net.send({ t: 'loadout', primary: this.weapons.primary });
+        this.onRoster();
         break;
       }
-      case 'join': this.names.set(m.player.id, m.player.name); this.scores.set(m.player.id, { kills: 0, deaths: 0, ping: 0, team: m.player.team }); if (m.player.id !== this.myId) { this.addRemote(m.player); this.hud.chat('·', `${m.player.name} joined`); } break;
-      case 'leave': { const r = this.remotes.get(m.id); if (r) { r.dispose(this.scene); this.remotes.delete(m.id); this.hud.chat('·', `${r.name} left`); } this.scores.delete(m.id); break; }
+      case 'join': this.names.set(m.player.id, m.player.name); this.scores.set(m.player.id, { kills: 0, deaths: 0, ping: 0, team: m.player.team }); if (m.player.id !== this.myId) { this.addRemote(m.player); this.hud.chat('·', `${m.player.name} joined`); } this.onRoster(); break;
+      case 'leave': { const r = this.remotes.get(m.id); if (r) { r.dispose(this.scene); this.remotes.delete(m.id); this.hud.chat('·', `${r.name} left`); } this.scores.delete(m.id); if (this.specId === m.id) this.specId = null; this.onRoster(); break; }
       case 'state': {
         for (const s of m.players) {
           if (s.id === this.myId) { if (s.hp !== this.hp) { this.hp = s.hp; this.hud.setHp(this.hp); } continue; }
@@ -173,10 +184,12 @@ export class Game {
       }
       case 'kill': {
         const k = this.names.get(m.killer) ?? '?', v = this.names.get(m.victim) ?? '?';
-        this.hud.kill(k, v, m.w, m.headshot, m.killer === this.myId || m.victim === this.myId);
+        const paint = this.colorOf(m.killer);
+        this.hud.kill(k, v, m.w, m.headshot, m.killer === this.myId || m.victim === this.myId, m.nade, paint);
         if (m.killer === this.myId) { this.sfx.kill(); this.remotes.get(m.victim)?.flash(1.6); }
-        if (m.victim === this.myId) this.dieMe(k, m.w, m.headshot);
-        else this.remotes.get(m.victim)?.die(performance.now());
+        if (m.victim === this.myId) this.dieMe(k, m.w, m.headshot, m.nade, paint);
+        else this.remotes.get(m.victim)?.die(performance.now(), paint);
+        if (this.specId === m.victim) this.specId = null;
         break;
       }
       case 'score': {
@@ -186,8 +199,10 @@ export class Game {
       }
       case 'match': {
         const prev = this.match.phase;
+        const prevRound = this.match.round;
         this.match = m.match;
-        if (m.match.phase === 'live' && prev !== 'live') { this.sfx.matchStart(); this.flash('FIGHT!', `first to ${30} or best in ${Math.round((m.match.endsAt - this.net.serverNow()) / 60000)} min`); }
+        if (m.match.mode === 'elim' && m.match.phase === 'live' && m.match.round) { this.onRound(m.match.round, prevRound); break; }
+        if (m.match.phase === 'live' && prev !== 'live') { this.sfx.matchStart(); this.flash('GAME ON!', `first to ${MATCH.killLimit} marks or best in ${Math.round((m.match.endsAt - this.net.serverNow()) / 60000)} min`); }
         if (m.match.phase === 'over') { this.sfx.matchOver(); this.flash(this.winnerText(), 'next round soon'); this.hud.showScoreboard(true, this.scoreRows(), this.match); setTimeout(() => this.hud.showScoreboard(false), 8000); }
         if (m.match.phase === 'warmup' && prev === 'over') this.flash('WARMUP', 'match starts soon');
         break;
@@ -198,14 +213,53 @@ export class Game {
     }
   }
 
+  /** Elimination round transitions: freeze banner, go, round-over banner (who won and why). */
+  private onRound(r: NonNullable<MatchInfo['round']>, prev: MatchInfo['round']) {
+    if (prev && prev.n === r.n && prev.stage === r.stage) return;
+    if (r.stage === 'freeze') {
+      this.specId = null;
+      if (r.n === 1) this.sfx.matchStart();
+      const [a, b] = this.match.teamScore;
+      this.flash(`ROUND ${r.n}`, `get ready · NIGHT ${a} – ${b} DAY · first to ${ELIM.roundsToWin}`, ELIM.freezeMs);
+    } else if (r.stage === 'live') {
+      this.sfx.spawn();
+      this.flash('GO!', 'last side standing takes the round', 1200);
+    } else if (r.stage === 'over') {
+      const side = (t: 0 | 1) => (t === 0 ? 'NIGHT' : 'DAY');
+      const big = r.winner === -1 || r.winner === undefined ? 'ROUND DRAW' : `${side(r.winner)} TAKES ROUND ${r.n}`;
+      const why = r.why === 'time'
+        ? `time ran out · ${side(ELIM.defenders)} held on`
+        : r.winner === -1 ? 'both sides marked out' : `${side(r.winner === 0 ? 1 : 0)} all marked out`;
+      const mine = r.winner === this.myTeam;
+      if (mine) this.sfx.kill(); else this.sfx.hurt();
+      this.hud.setCenter(big, why);
+      setTimeout(() => { if (this.match.round?.stage === 'over' && this.match.round.n === r.n) this.hud.setCenter(''); }, ELIM.roundOverMs - 200);
+    }
+  }
+
+  /** Whose paint: a player's skin colour. */
+  colorOf(id: number): string {
+    if (id === this.myId) return this.myColor;
+    return this.remotes.get(id)?.color ?? '#ff3bd5';
+  }
+
+  /** In an elimination freeze or round-over banner nobody can shoot. */
+  get frozen() {
+    const r = this.match.round;
+    return this.match.mode === 'elim' && this.match.phase === 'live' && !!r && r.stage !== 'live';
+  }
+
+  /** Elimination round in progress: marked players stay out until the next round. */
+  get noRespawn() { return this.match.mode === 'elim' && this.match.phase === 'live'; }
+
   private winnerText() {
-    if (this.match.mode === 'tdm') { const [a, b] = this.match.teamScore; return a === b ? 'DRAW' : `${a > b ? 'NIGHT' : 'DAY'} TEAM WINS`; }
+    if (this.match.mode === 'tdm' || this.match.mode === 'elim') { const [a, b] = this.match.teamScore; return a === b ? 'DRAW' : `${a > b ? 'NIGHT' : 'DAY'} TEAM WINS`; }
     let best = -1, name = '';
     for (const [id, s] of this.scores) if (s.kills > best) { best = s.kills; name = this.names.get(id) ?? '?'; }
     return best > 0 ? `${name} WINS` : 'MATCH OVER';
   }
 
-  private flash(big: string, sub: string) { this.hud.setCenter(big, sub); setTimeout(() => { if (this.me.alive && !this.paused) this.hud.setCenter(''); }, 2500); }
+  private flash(big: string, sub: string, ms = 2500) { this.hud.setCenter(big, sub); setTimeout(() => { if (this.me.alive && !this.paused) this.hud.setCenter(''); }, ms); }
 
   private addRemote(p: PlayerSnapshot) {
     this.remotes.get(p.id)?.dispose(this.scene);
@@ -218,15 +272,40 @@ export class Game {
     if (!this.paused) this.hud.setCenter('');
     this.camDip = 0; this.camDipV = 0;
     if (this.corpse) this.corpse.group.visible = false;
+    this.specId = null;
   }
 
-  private dieMe(killer: string, w: WeaponId, headshot: boolean) {
+  private dieMe(killer: string, w: WeaponId, headshot: boolean, nade?: 'paint', paint?: string) {
     this.me.alive = false; this.hp = 0; this.diedAt = performance.now(); this.hud.setHp(0); this.sfx.die();
     this.weapons.scoped = false;
     this.deathPos = [...this.me.body.p] as Vec3; this.deathYaw = this.me.yaw;
-    this.orbitStart = this.openOrbitAngle();
+    this.orbitStart = this.openOrbitAngle(); this.orbitYaw = 0;
+    this.specId = null;
     this.showCorpse();
-    this.hud.setCenter(`${headshot ? 'HEADSHOT by' : 'Killed by'} ${killer}`, `${WEAPONS[w].name} · respawning…`);
+    this.corpse?.mark(paint ?? '#ff3bd5');
+    const how = nade ? 'Paint grenade' : WEAPONS[w].name;
+    const next = this.noRespawn ? 'out this round · click to watch a teammate' : 'back in soon…';
+    this.hud.setCenter(`${headshot ? 'HEAD MARK by' : 'Marked by'} ${killer}`, `${how} · ${next}`);
+  }
+
+  /** Joined an elimination round in progress: watch until the next round. */
+  private sitOut(p: Vec3, yaw: number) {
+    this.me.alive = false; this.hp = 0; this.diedAt = performance.now() - PLAYER.respawnMs; this.hud.setHp(0);
+    this.deathPos = [...p] as Vec3; this.deathYaw = yaw;
+    this.orbitStart = this.openOrbitAngle(); this.orbitYaw = 0;
+    if (this.corpse) this.corpse.group.visible = false;
+    this.hud.setCenter('Round in progress', 'you are in next round · click to watch a teammate');
+  }
+
+  /** Next living teammate after the one being watched (elimination spectating). */
+  private cycleSpectate() {
+    const mates = [...this.remotes.values()].filter(r => r.alive && r.team === this.myTeam).sort((a, b) => a.id - b.id);
+    if (!mates.length) { this.specId = null; return; }
+    const i = mates.findIndex(r => r.id === this.specId);
+    const next = mates[(i + 1) % mates.length];
+    this.specId = next.id;
+    this.orbitYaw = 0;
+    this.hud.setCenter(`Watching ${next.name}`, 'click for the next teammate');
   }
 
   private panTo(p: Vec3) {
@@ -247,56 +326,50 @@ export class Game {
 
   private fireLocal() {
     const eye = this.me.eye();
-    const targets = [...this.remotes.values()].filter(r => r.alive && (this.match.mode !== 'tdm' || r.team !== this.myTeam)).map(r => ({ id: r.id, p: r.p, crouch: r.crouch, alive: r.alive }));
+    const targets = [...this.remotes.values()].filter(r => r.alive && (!isTeamMode(this.match.mode) || r.team !== this.myTeam)).map(r => ({ id: r.id, p: r.p, crouch: r.crouch, alive: r.alive }));
     const res = this.weapons.fire(eye, this.me.yaw, this.me.pitch, this.me.speedFrac, targets, this.me.body.crouch, this.me.body.ground);
     if (!res) return;
     this.net.send({ t: 'shoot', w: res.w, o: res.o, d: res.dirs[0], hits: res.hits });
     this.sfx.shot(res.w);
     this.viewmodel.kick(recoilDef(res.w).vmKick);
-    if (res.w !== 'knife') {
+    const paint = new THREE.Color(this.myColor).getHex();
+    if (res.w !== 'tag') {
       this.viewmodel.flash();
       const muzzle = this.viewmodel.muzzleWorld();
-      this.fx.light(muzzle, res.w === 'shotgun' || res.w === 'sniper' ? 7 : 4);
-      for (let i = 0; i < res.ends.length; i++) {
-        // pellets after the first get a dimmer tracer so a shotgun blast is not a white sheet
-        if (i < 4) this.fx.tracer(muzzle, res.ends[i], i ? 0x997a40 : 0xffe7a0);
-      }
-      if (res.w === 'rifle' || res.w === 'pistol') {
-        const e = this.viewmodel.ejectWorld();
-        const cy = Math.cos(this.me.yaw), sy = Math.sin(this.me.yaw);
-        const side = 1.6 + Math.random() * 0.8;
-        this.fx.casing(e, [cy * side + this.me.body.v[0], 1.6 + Math.random() * 0.8, -sy * side + this.me.body.v[2]], this.me.body.p[1]);
-      }
+      this.fx.light(muzzle, res.w === 'pump' ? 3 : 1.5);
+      // the ball's streak, in your paint
+      for (let i = 0; i < Math.min(4, res.ends.length); i++) this.fx.tracer(muzzle, res.ends[i], paint);
     }
+    const smokes = this.grenades.smoke.volumes();
     for (let i = 0; i < res.ends.length; i++) {
       const hit = res.pellet[i];
-      if (hit) { const r = this.remotes.get(hit.id); if (r) this.fx.puff(res.ends[i], r.color, hit.part === 'head'); }
-      else if (res.wall[i]) this.fx.impact(res.ends[i], res.dirs[i], res.w === 'shotgun' || res.w === 'knife');
+      if (hit) {
+        // the server drops hits through smoke; do not show a splat that will not count
+        if (res.w !== 'tag' && smokeBlocks(res.o, res.ends[i], smokes)) continue;
+        if (this.remotes.has(hit.id)) this.fx.puff(res.ends[i], this.myColor, hit.part === 'head');
+      } else if (res.wall[i] && res.w !== 'tag') this.fx.impact(res.ends[i], res.dirs[i], res.w === 'pistol', this.myColor);
     }
     if (this.weapons.def.mag > 0 && this.weapons.mag[res.w] === 0 && this.weapons.startReload()) this.sfx.reload();
   }
 
-  /** Effects for someone else's shot: muzzle flash at their gun, tracer, impact or puff. */
+  /** Effects for someone else's shot: air puff at their marker, the ball's streak, a splat on the wall or on the player. */
   private remoteShotFx(w: WeaponId, o: Vec3, d: Vec3, hit: Vec3 | undefined, r: RemotePlayer | undefined) {
-    if (w === 'knife') return;
+    if (w === 'tag') return;
     const from = r && r.alive ? r.muzzleWorld(this.tmpV) : new THREE.Vector3(o[0], o[1] - 0.25, o[2]);
-    this.fx.muzzle(from, w === 'shotgun' || w === 'sniper' ? 1.4 : w === 'pistol' ? 0.8 : 1);
-    const pellets = w === 'shotgun' ? 5 : 1;
-    const range = Math.min(WEAPONS[w].range, 80);
-    for (let i = 0; i < pellets; i++) {
-      let dir = d;
-      if (i > 0) { const yaw = Math.atan2(-d[0], -d[2]), pitch = Math.asin(Math.max(-1, Math.min(1, d[1]))); dir = forward(yaw + (Math.random() - 0.5) * 0.12, pitch + (Math.random() - 0.5) * 0.12); }
-      if (i === 0 && hit) {
-        this.fx.tracer(from, hit, 0xffd37a);
-        const v = this.victimAt(hit);
-        if (v) this.fx.puff(hit, v.color);
-        continue;
-      }
-      const t = rayWorld(o, dir, this.bullets, range);
-      const end: Vec3 = [o[0] + dir[0] * (t ?? range), o[1] + dir[1] * (t ?? range), o[2] + dir[2] * (t ?? range)];
-      if (i < 3) this.fx.tracer(from, end, 0xffd37a);
-      if (t !== null) this.fx.impact(end, dir, pellets > 1);
+    const paint = r?.color ?? '#ff3bd5';
+    const hex = new THREE.Color(paint).getHex();
+    this.fx.muzzle(from, w === 'pump' ? 0.6 : 0.4, false);
+    if (hit) {
+      this.fx.tracer(from, hit, hex);
+      if (this.victimAt(hit)) this.fx.puff(hit, paint);
+      else this.fx.impact(hit, d, w === 'pistol', paint);
+      return;
     }
+    const range = Math.min(WEAPONS[w].range, 80);
+    const t = rayWorld(o, d, this.bullets, range);
+    const end: Vec3 = [o[0] + d[0] * (t ?? range), o[1] + d[1] * (t ?? range), o[2] + d[2] * (t ?? range)];
+    this.fx.tracer(from, end, hex);
+    if (t !== null) this.fx.impact(end, d, w === 'pistol', paint);
   }
 
   private victimAt(p: Vec3): RemotePlayer | null {
@@ -352,17 +425,24 @@ export class Game {
     return best;
   }
 
-  private updateKillCam(now: number) {
+  /** Marked cam: orbit where you were marked, or (elimination) the teammate you are watching. Mouse turns the orbit. */
+  private updateKillCam(now: number, dx = 0) {
     const t = now - this.diedAt;
     if (this.corpse) {
+      // rock back from the hit, then sink to a knee (same as remote players)
       const k = Math.min(1, t / 380);
       const g = this.corpse.group;
-      g.rotation.x = (k * k * Math.PI / 2 - (t > 380 ? Math.sin(Math.min(1, (t - 380) / 260) * Math.PI) * 0.12 : 0));
-      g.position.y = this.deathPos[1] + 0.1 * k;
+      g.rotation.x = Math.sin(Math.min(1, t / 260) * Math.PI) * 0.22 + 0.08 * k;
+      g.scale.y = 1 - 0.32 * k * k;
+      g.position.y = this.deathPos[1];
     }
-    const c: Vec3 = [this.deathPos[0], this.deathPos[1] + 0.5, this.deathPos[2]];
-    const ease = Math.min(1, t / 600);
-    const ang = this.orbitStart + (t / 1000) * 0.45;
+    this.orbitYaw -= dx * this.input.sensitivity;
+    const watch = this.specId !== null ? this.remotes.get(this.specId) : undefined;
+    if (watch && !watch.alive) this.specId = null;
+    const focus = watch && watch.alive ? watch.p : this.deathPos;
+    const c: Vec3 = [focus[0], focus[1] + (watch ? 1.1 : 0.5), focus[2]];
+    const ease = watch ? 1 : Math.min(1, t / 600);
+    const ang = (watch ? watch.yaw + Math.PI * 0.85 : this.orbitStart + (t / 1000) * 0.45) + this.orbitYaw;
     const h = 1.2 + 0.9 * ease;
     const dir: Vec3 = [Math.sin(ang), h / 3.2, Math.cos(ang)];
     const dl = Math.hypot(dir[0], dir[1], dir[2]);
@@ -386,15 +466,15 @@ export class Game {
       this.viewmodel.sway(take.dx, take.dy);
       if (take.wheel) { this.weapons.cycle(take.wheel); this.onSwitch(); }
       if (this.weapons.def.scope) this.weapons.scoped = this.input.aim && !this.weapons.reloading; else this.weapons.scoped = false;
-      if (this.weapons.canFire(this.input.fire, take.fireQueued)) this.fireLocal();
-    }
+      if (!this.frozen && this.weapons.canFire(this.input.fire, take.fireQueued)) this.fireLocal();
+    } else if (canAct && !this.me.alive && this.noRespawn && take.fireQueued) this.cycleSpectate();
     // fixed-step physics
     this.stepT += dt;
     const step = 1 / 120;
     while (this.stepT >= step) { this.me.update(step, canAct); this.stepT -= step; }
     this.weapons.update(dt);
     // respawn request
-    if (!this.me.alive && performance.now() - this.diedAt > PLAYER.respawnMs && canAct) this.net.send({ t: 'respawn' });
+    if (!this.me.alive && !this.noRespawn && performance.now() - this.diedAt > PLAYER.respawnMs && canAct) this.net.send({ t: 'respawn' });
     // remotes
     const now = performance.now();
     const renderT = this.net.serverNow() - INTERP_MS;
@@ -423,7 +503,7 @@ export class Game {
       const bob = this.me.moving ? Math.sin(this.me.bobPhase) * 0.035 * this.me.speedFrac : 0;
       this.camera.position.set(eye[0], eye[1] + bob + this.camDip * 0.12, eye[2]);
       this.camera.rotation.set(this.me.pitch + this.weapons.recoilPitch + this.weapons.punch, this.me.yaw + this.weapons.recoilYaw, 0);
-    } else this.updateKillCam(now);
+    } else this.updateKillCam(now, canAct ? take.dx : 0);
     const scopeFov = this.weapons.scoped ? this.baseFov * (this.weapons.def.scope ?? 1) : this.baseFov;
     const targetFov = scopeFov + this.weapons.fovPunch * (this.weapons.scoped ? 0.3 : 1);
     if (Math.abs(this.camera.fov - targetFov) > 0.05) { this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * (this.weapons.fovPunch > 0.5 ? 30 : 14)); this.camera.updateProjectionMatrix(); }
@@ -433,11 +513,12 @@ export class Game {
     this.viewmodel.update(dt, this.me.moving ? this.me.speedFrac : 0, this.me.bobPhase, this.weapons.reloading, this.weapons.scoped, this.me.alive);
     this.world.tick(dt, t / 1000);
     // hud
-    this.hud.setWeapon(this.weapons.current, this.weapons.mag[this.weapons.current], this.weapons.reserve[this.weapons.current], this.weapons.reloading, this.weapons.scoped);
+    // crosshair off while scoped and during the marked cam
+    this.hud.setWeapon(this.weapons.current, this.weapons.mag[this.weapons.current], this.weapons.reserve[this.weapons.current], this.weapons.reloading, this.weapons.scoped || !this.me.alive);
     const scope = this.weapons.scoped && this.me.alive;
     if (scope !== this.scopeShown) { this.scopeShown = scope; this.hud.setScope(scope); }
     const airborne = !this.me.body.ground;
-    const spread = this.weapons.current === 'knife' ? 0 : this.weapons.effectiveSpread(this.me.speedFrac, this.me.body.crouch, !airborne);
+    const spread = this.weapons.current === 'tag' ? 0 : this.weapons.effectiveSpread(this.me.speedFrac, this.me.body.crouch, !airborne);
     this.shownSpread += (spread - this.shownSpread) * Math.min(1, dt * 18);
     this.hud.setSpread(Math.tan(this.shownSpread) * pxPerRad);
     this.hud.setMatch(this.match, this.net.serverNow(), this.myTeam);

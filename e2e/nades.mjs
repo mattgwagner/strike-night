@@ -15,7 +15,7 @@ const p = await browser.newPage({ viewport: { width: 960, height: 600 } });
 p.on('console', m => { if (process.env.DBG) console.log(m.type(), m.text().slice(0, 200)); if (m.type() === 'error') errs.push(m.text().slice(0, 300)); });
 p.on('pageerror', e => errs.push(e.message));
 p.setDefaultTimeout(120000);
-await p.goto(`${url}/?room=${room}&name=Nader&skin=chef&w=rifle`);
+await p.goto(`${url}/?room=${room}&name=Nader&skin=chef&w=semi`);
 await p.waitForSelector('button.go');
 await p.click('button.go', { timeout: 120000 });
 await p.waitForFunction(() => window.strike && window.strike.myId > 0, null, { timeout: 60000 });

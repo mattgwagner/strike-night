@@ -1,5 +1,5 @@
 // Client weapon state: ammo, reload, fire cadence, spread + hit detection.
-import { WEAPONS, type WeaponId, PRIMARY_WEAPONS } from '../../shared/constants';
+import { DEFAULT_PRIMARY, WEAPONS, type WeaponId, PRIMARY_WEAPONS } from '../../shared/constants';
 import type { MapBox } from '../../shared/map';
 import { forward, rayPlayer, rayWorld } from '../../shared/physics';
 import type { HitReport, Vec3 } from '../../shared/protocol';
@@ -27,24 +27,24 @@ export interface ShotResult {
 interface RecoilDef { climb(i: number): number; drift(i: number): number; ret: number; punch: number; fov: number; heat: number; vmKick: number }
 const jitter = (a: number) => (Math.random() - 0.5) * a;
 const RECOIL: Record<WeaponId, RecoilDef> = {
-  knife:   { climb: () => 0, drift: () => 0, ret: 10, punch: 0.01, fov: 0, heat: 0, vmKick: 0.4 },
-  pistol:  { climb: () => WEAPONS.pistol.recoil, drift: () => jitter(0.006), ret: 14, punch: 0.012, fov: 0, heat: 0.006, vmKick: 0.5 },
-  rifle:   {
-    // climbs hard for ~8 shots, then drifts right and wanders
-    climb: i => WEAPONS.rifle.recoil * (i < 2 ? 0.55 : i < 9 ? 1 : 0.25),
-    drift: i => (i < 4 ? jitter(0.002) : i < 12 ? -0.0055 + jitter(0.003) : Math.sin(i * 0.9) * 0.008),
-    ret: 7, punch: 0.006, fov: 0, heat: 0.003, vmKick: 0.35,
+  tag:    { climb: () => 0, drift: () => 0, ret: 10, punch: 0.01, fov: 0, heat: 0, vmKick: 0.4 },
+  pistol: { climb: () => WEAPONS.pistol.recoil, drift: () => jitter(0.006), ret: 14, punch: 0.01, fov: 0, heat: 0.006, vmKick: 0.45 },
+  // markers kick far less than guns: a puff of air, a little climb, quick return
+  semi:   { climb: () => WEAPONS.semi.recoil, drift: () => jitter(0.004), ret: 12, punch: 0.008, fov: 0, heat: 0.002, vmKick: 0.4 },
+  auto:   {
+    climb: i => WEAPONS.auto.recoil * (i < 3 ? 0.6 : i < 10 ? 1 : 0.3),
+    drift: i => (i < 4 ? jitter(0.003) : Math.sin(i * 0.8) * 0.006 + jitter(0.003)),
+    ret: 8, punch: 0.006, fov: 0, heat: 0.004, vmKick: 0.32,
   },
-  shotgun: { climb: () => WEAPONS.shotgun.recoil, drift: () => jitter(0.01), ret: 6, punch: 0.06, fov: 5, heat: 0, vmKick: 1.6 },
-  sniper:  { climb: () => WEAPONS.sniper.recoil, drift: () => jitter(0.008), ret: 2.4, punch: 0.05, fov: 7, heat: 0, vmKick: 1.8 },
+  pump:   { climb: () => WEAPONS.pump.recoil, drift: () => jitter(0.006), ret: 3, punch: 0.04, fov: 4, heat: 0, vmKick: 1.5 },
 };
 export function recoilDef(w: WeaponId) { return RECOIL[w]; }
 
 export class Weapons {
-  current: WeaponId = 'rifle';
-  primary: WeaponId = 'rifle';
-  mag: Record<WeaponId, number> = { knife: 0, pistol: WEAPONS.pistol.mag, rifle: WEAPONS.rifle.mag, shotgun: WEAPONS.shotgun.mag, sniper: WEAPONS.sniper.mag };
-  reserve: Record<WeaponId, number> = { knife: 0, pistol: WEAPONS.pistol.reserve, rifle: WEAPONS.rifle.reserve, shotgun: WEAPONS.shotgun.reserve, sniper: WEAPONS.sniper.reserve };
+  current: WeaponId = DEFAULT_PRIMARY;
+  primary: WeaponId = DEFAULT_PRIMARY;
+  mag = Object.fromEntries(Object.values(WEAPONS).map(w => [w.id, w.mag])) as Record<WeaponId, number>;
+  reserve = Object.fromEntries(Object.values(WEAPONS).map(w => [w.id, w.reserve])) as Record<WeaponId, number>;
   reloadingUntil = 0;
   nextShotAt = 0;
   recoilPitch = 0;      // aim offset added to view pitch (bullets follow it)
@@ -71,7 +71,7 @@ export class Weapons {
   setPrimary(w: WeaponId) { if (PRIMARY_WEAPONS.includes(w)) { this.primary = w; if (WEAPONS[this.current].slot === 1) this.current = w; } }
 
   switchSlot(slot: 1 | 2 | 3) {
-    const w: WeaponId = slot === 1 ? this.primary : slot === 2 ? 'pistol' : 'knife';
+    const w: WeaponId = slot === 1 ? this.primary : slot === 2 ? 'pistol' : 'tag';
     if (w === this.current) return false;
     this.current = w; this.reloadingUntil = 0; this.scoped = false;
     this.nextShotAt = Math.max(this.nextShotAt, performance.now() + 250);
@@ -122,7 +122,7 @@ export class Weapons {
     if (crouch) spread *= 0.7;
     if (!ground) spread = spread * 2.5 + 0.02;
     if (this.scoped) spread *= 0.2;
-    if (d.id === 'sniper' && !this.scoped) spread += 0.08;
+    if (d.scope && !this.scoped) spread += 0.08;
     return spread;
   }
 

@@ -1,5 +1,6 @@
-// Pooled combat effects: muzzle flashes, tracers, impact sparks, hit puffs,
-// bullet decals and shell casings. Everything is allocated once in the
+// Pooled paintball effects: air puffs at the barrel, ball tracers, paint
+// bursts on players and walls, round paint splats that stay ~20 s, and shell
+// casings (unused by markers, kept for the engine). Everything is allocated once in the
 // constructor; spawning an effect only writes into typed arrays.
 import * as THREE from 'three';
 import type { MapBox } from '../../shared/map';
@@ -10,21 +11,21 @@ const vy = (v: V3) => (Array.isArray(v) ? v[1] : v.y);
 const vz = (v: V3) => (Array.isArray(v) ? v[2] : v.z);
 
 let flashTex: THREE.Texture | null = null;
-/** Shared star-burst texture for muzzle flashes (also used by the viewmodel). */
+/** Shared soft air-puff texture for marker shots (also used by the viewmodel). */
 export function flashTexture(): THREE.Texture {
   if (flashTex) return flashTex;
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const g = c.getContext('2d')!;
   const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grad.addColorStop(0, 'rgba(255,255,240,1)');
-  grad.addColorStop(0.25, 'rgba(255,220,120,0.95)');
-  grad.addColorStop(0.6, 'rgba(255,140,30,0.35)');
-  grad.addColorStop(1, 'rgba(255,90,0,0)');
+  grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+  grad.addColorStop(0.35, 'rgba(225,235,245,0.55)');
+  grad.addColorStop(0.7, 'rgba(200,210,225,0.18)');
+  grad.addColorStop(1, 'rgba(200,210,225,0)');
   g.fillStyle = grad;
   g.beginPath();
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2, r = i % 2 ? 13 : 32;
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2, r = i % 2 ? 24 : 32;
     g.lineTo(32 + Math.cos(a) * r, 32 + Math.sin(a) * r);
   }
   g.closePath(); g.fill();
@@ -114,20 +115,36 @@ class Particles {
 
 // ----- decals ---------------------------------------------------------------
 
+// Round paint splats: a lumpy disc (edge wobble from the per-decal seed) with
+// a few droplets around it, in the shooter's colour.
 const DECAL_VS = `
-attribute float aAlpha; varying float vAlpha; varying vec2 vUv;
-void main() { vAlpha = aAlpha; vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+attribute float aAlpha; attribute vec3 aColor; attribute float aSeed;
+varying float vAlpha; varying vec2 vUv; varying vec3 vColor; varying float vSeed;
+void main() { vAlpha = aAlpha; vUv = uv; vColor = aColor; vSeed = aSeed; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 const DECAL_FS = `
-varying float vAlpha; varying vec2 vUv;
+varying float vAlpha; varying vec2 vUv; varying vec3 vColor; varying float vSeed;
 void main() {
-  float d = length(vUv - 0.5) * 2.0;
-  float a = vAlpha * (smoothstep(1.0, 0.6, d) * 0.45 + smoothstep(0.42, 0.3, d) * 0.5);
+  vec2 q = (vUv - 0.5) * 2.0;
+  float d = length(q);
+  float ang = atan(q.y, q.x);
+  float edge = 0.62 + 0.07 * sin(ang * 5.0 + vSeed * 6.3) + 0.05 * sin(ang * 9.0 - vSeed * 3.1);
+  float body = smoothstep(edge + 0.03, edge - 0.02, d);
+  // droplets: three small discs on a ring, placed by the seed
+  float drops = 0.0;
+  for (int i = 0; i < 3; i++) {
+    float a = vSeed * 40.0 + float(i) * 2.1;
+    vec2 c = vec2(cos(a), sin(a)) * (0.78 + 0.08 * float(i));
+    drops = max(drops, smoothstep(0.1, 0.07, length(q - c)));
+  }
+  float a = vAlpha * max(body, drops) * 0.95;
   if (a <= 0.002) discard;
-  gl_FragColor = vec4(0.03, 0.03, 0.04, a);
+  // a little shine toward the middle so it reads wet
+  vec3 col = vColor * (0.85 + 0.25 * smoothstep(edge, 0.0, d));
+  gl_FragColor = vec4(col, a);
 }`;
 
-const MAX_DECALS = 64;
-const DECAL_HOLD = 6, DECAL_FADE = 2;
+const MAX_DECALS = 200;
+const DECAL_HOLD = 18, DECAL_FADE = 2;
 
 // ----- the system -------------------------------------------------------------
 
@@ -139,6 +156,8 @@ export class Fx {
   private group = new THREE.Group();
   private sparks = new Particles(384, true, 9, 2.5);
   private puffs = new Particles(192, false, -0.4, 3.5);
+  /** Paint droplets: opaque, fall like liquid. */
+  private paint = new Particles(512, false, 11, 1.2);
   // tracers
   private trPos = new Float32Array(TRACERS * 6);
   private trCol = new Float32Array(TRACERS * 6);
@@ -151,6 +170,8 @@ export class Fx {
   // decals
   private dcPos = new Float32Array(MAX_DECALS * 12);
   private dcAlpha = new Float32Array(MAX_DECALS * 4);
+  private dcColor = new Float32Array(MAX_DECALS * 12);
+  private dcSeed = new Float32Array(MAX_DECALS * 4);
   private dcAge = new Float32Array(MAX_DECALS).fill(1e9);
   private dcGeo = new THREE.BufferGeometry();
   private dcMat = new THREE.ShaderMaterial({ vertexShader: DECAL_VS, fragmentShader: DECAL_FS, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
@@ -171,7 +192,7 @@ export class Fx {
   private zero = new THREE.Matrix4().makeScale(0, 0, 0);
 
   constructor(private scene: THREE.Scene, private boxes: MapBox[]) {
-    this.group.add(this.sparks.points, this.puffs.points);
+    this.group.add(this.sparks.points, this.puffs.points, this.paint.points);
     // tracers
     this.trGeo.setAttribute('position', new THREE.BufferAttribute(this.trPos, 3).setUsage(THREE.DynamicDrawUsage));
     this.trGeo.setAttribute('color', new THREE.BufferAttribute(this.trCol, 3).setUsage(THREE.DynamicDrawUsage));
@@ -188,6 +209,8 @@ export class Fx {
     this.dcGeo.setAttribute('position', new THREE.BufferAttribute(this.dcPos, 3).setUsage(THREE.DynamicDrawUsage));
     this.dcGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     this.dcGeo.setAttribute('aAlpha', new THREE.BufferAttribute(this.dcAlpha, 1).setUsage(THREE.DynamicDrawUsage));
+    this.dcGeo.setAttribute('aColor', new THREE.BufferAttribute(this.dcColor, 3).setUsage(THREE.DynamicDrawUsage));
+    this.dcGeo.setAttribute('aSeed', new THREE.BufferAttribute(this.dcSeed, 1).setUsage(THREE.DynamicDrawUsage));
     this.dcGeo.setIndex(idx);
     this.dcMat.side = THREE.DoubleSide;
     const dc = new THREE.Mesh(this.dcGeo, this.dcMat);
@@ -202,7 +225,7 @@ export class Fx {
     }
     // a fixed number of lights so the shader light count never changes
     for (let i = 0; i < 2; i++) {
-      const l = new THREE.PointLight(0xffb060, 0, 7, 1.2);
+      const l = new THREE.PointLight(0xfff4e0, 0, 7, 1.2);
       this.group.add(l);
       this.lights.push({ l, life: 0, max: 1, peak: 0, fresh: false });
     }
@@ -253,34 +276,34 @@ export class Fx {
     (this.trGeo.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
   }
 
-  /** Bullet hits the world: spark burst + a dark mark that fades over ~8 s. */
-  impact(point: V3, dir: V3, small = false) {
+  /** A paintball breaks on the world: droplets out of the surface and a round splat that stays ~20 s. */
+  impact(point: V3, dir: V3, small = false, color: THREE.ColorRepresentation = 0xff3bd5) {
     const px = vx(point), py = vy(point), pz = vz(point);
     const n = this.normalAt(px, py, pz, vx(dir), vy(dir), vz(dir));
-    const count = small ? 4 : 8;
+    const c = this.tmpC.set(color).convertLinearToSRGB(); // raw shader output: hand it display values
+    const count = small ? 5 : 9;
     for (let i = 0; i < count; i++) {
-      const s = 2 + Math.random() * 4;
-      this.tmpC.setRGB(1, 0.75 + Math.random() * 0.25, 0.35 + Math.random() * 0.3);
-      this.sparks.spawn(px + n[0] * 0.02, py + n[1] * 0.02, pz + n[2] * 0.02,
-        (n[0] + (Math.random() - 0.5) * 1.4) * s, (n[1] + Math.random() * 0.9) * s, (n[2] + (Math.random() - 0.5) * 1.4) * s,
-        this.tmpC, 0.035 + Math.random() * 0.03, 0.18 + Math.random() * 0.22);
+      const s = 1.2 + Math.random() * 2.2;
+      this.paint.spawn(px + n[0] * 0.03, py + n[1] * 0.03, pz + n[2] * 0.03,
+        (n[0] + (Math.random() - 0.5) * 1.6) * s, (n[1] + Math.random() * 0.8) * s, (n[2] + (Math.random() - 0.5) * 1.6) * s,
+        c, 0.03 + Math.random() * 0.03, 0.3 + Math.random() * 0.25);
     }
-    // a little dust
-    this.tmpC.setRGB(0.55, 0.52, 0.48);
-    this.puffs.spawn(px + n[0] * 0.05, py + n[1] * 0.05, pz + n[2] * 0.05, n[0] * 0.6, n[1] * 0.6 + 0.2, n[2] * 0.6, this.tmpC, 0.12, 0.45, 2.5);
-    this.decal(px, py, pz, n, small ? 0.035 : 0.055);
+    this.decal(px, py, pz, n, (small ? 0.09 : 0.13) * (0.85 + Math.random() * 0.35), c);
   }
 
-  /** Bullet hits a player: a cartoon puff in their colour, plus a few bright bits. */
+  /** A paintball breaks on a player: a burst of paint in the shooter's colour, plus a few white pops so it reads at range. */
   puff(point: V3, color: THREE.ColorRepresentation, head = false) {
     const px = vx(point), py = vy(point), pz = vz(point);
-    const c = this.tmpC.set(color);
-    const n = head ? 9 : 6;
+    const c = this.tmpC.set(color).convertLinearToSRGB(); // raw shader output: hand it display values
+    const n = head ? 16 : 11;
     for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2, s = 0.8 + Math.random() * 1.6;
-      this.puffs.spawn(px, py, pz, Math.cos(a) * s, 0.6 + Math.random() * 1.4, Math.sin(a) * s, c, 0.12 + Math.random() * 0.08, 0.35 + Math.random() * 0.2, 1.5);
+      const a = Math.random() * Math.PI * 2, s = 0.8 + Math.random() * 2.2;
+      this.paint.spawn(px, py, pz, Math.cos(a) * s, 0.8 + Math.random() * 2, Math.sin(a) * s, c, 0.04 + Math.random() * 0.05, 0.4 + Math.random() * 0.3);
     }
-    // white star pops so the hit reads at range
+    // a soft cloud of the same paint that hangs a moment
+    for (let i = 0; i < 3; i++) {
+      this.puffs.spawn(px, py, pz, (Math.random() - 0.5) * 1.2, 0.3 + Math.random() * 0.6, (Math.random() - 0.5) * 1.2, c, 0.12 + Math.random() * 0.06, 0.3 + Math.random() * 0.15, 1.8);
+    }
     this.tmpC.setRGB(1, 1, 1);
     for (let i = 0; i < (head ? 6 : 3); i++) {
       this.sparks.spawn(px, py, pz, (Math.random() - 0.5) * 5, Math.random() * 4, (Math.random() - 0.5) * 5, this.tmpC, head ? 0.07 : 0.05, 0.15);
@@ -301,8 +324,10 @@ export class Fx {
   update(dt: number, pxPerRad: number) {
     this.sparks.mat.uniforms.uScale.value = pxPerRad;
     this.puffs.mat.uniforms.uScale.value = pxPerRad;
+    this.paint.mat.uniforms.uScale.value = pxPerRad;
     this.sparks.update(dt);
     this.puffs.update(dt);
+    this.paint.update(dt);
     // tracers
     if (this.trLive) {
       let any = false;
@@ -361,7 +386,7 @@ export class Fx {
 
   dispose() {
     this.scene.remove(this.group);
-    this.sparks.dispose(); this.puffs.dispose();
+    this.sparks.dispose(); this.puffs.dispose(); this.paint.dispose();
     this.trGeo.dispose(); this.trMat.dispose();
     this.dcGeo.dispose(); this.dcMat.dispose();
     for (const s of this.sprites) (s.s.material as THREE.SpriteMaterial).dispose();
@@ -372,7 +397,7 @@ export class Fx {
 
   // ----- internals -----------------------------------------------------------
 
-  private decal(x: number, y: number, z: number, n: [number, number, number], r: number) {
+  private decal(x: number, y: number, z: number, n: [number, number, number], r: number, color: THREE.Color) {
     const i = this.dcNext; this.dcNext = (this.dcNext + 1) % MAX_DECALS;
     // tangent basis on an axis-aligned face
     let ux = 0, uy = 0, uz = 0, wx = 0, wy = 0, wz = 0;
@@ -390,8 +415,13 @@ export class Fx {
       this.dcPos[k + j * 3 + 1] = oy + ay * p + by * q;
       this.dcPos[k + j * 3 + 2] = oz + az * p + bz * q;
     }
+    const seed = Math.random();
+    for (let j = 0; j < 4; j++) {
+      this.dcColor[i * 12 + j * 3] = color.r; this.dcColor[i * 12 + j * 3 + 1] = color.g; this.dcColor[i * 12 + j * 3 + 2] = color.b;
+      this.dcSeed[i * 4 + j] = seed;
+    }
     this.dcAge[i] = 0;
-    (this.dcGeo.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    for (const name of ['position', 'aColor', 'aSeed']) (this.dcGeo.getAttribute(name) as THREE.BufferAttribute).needsUpdate = true;
   }
 
   /** Face normal of the box surface at a hit point; falls back to -dir. */

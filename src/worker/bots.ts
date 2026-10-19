@@ -5,7 +5,7 @@ import type { MapBox, MapData } from '../shared/map';
 import {
   bulletBoxes, canStand, dist, eyeHeight, forward, hasLos, rayPlayer, rayWorld, solidBoxes, stepBody,
 } from '../shared/physics';
-import type { HitReport, Vec3 } from '../shared/protocol';
+import { isTeamMode, type HitReport, type Vec3 } from '../shared/protocol';
 import type { Game, ServerPlayer } from './game';
 
 export type BotDifficulty = 'easy' | 'normal' | 'hard';
@@ -228,7 +228,8 @@ export class BotBrain {
       m.enemy = 0;
       m.path = [];
       m.v[0] = m.v[1] = m.v[2] = 0;
-      if (now - bot.diedAt >= PLAYER.respawnMs) out.push(...game.handle(bot.id, { t: 'respawn' }, now));
+      // same gate as a human: no respawn while an elimination round is on
+      if (now - bot.diedAt >= PLAYER.respawnMs && game.canRespawn()) out.push(...game.handle(bot.id, { t: 'respawn' }, now));
       return out;
     }
 
@@ -272,7 +273,7 @@ export class BotBrain {
         wish = [rx * m.strafe * speed * 0.45, rz * m.strafe * speed * 0.45];
       }
       const wpn = WEAPONS[bot.w];
-      if (wpn && game.match.phase !== 'over' && now - m.seen >= diff.reactionMs && now - bot.lastShot >= wpn.fireMs) {
+      if (wpn && game.canAttack() && now - m.seen >= diff.reactionMs && now - bot.lastShot >= wpn.fireMs) {
         out.push(...this.fire(game, grid, bot, now));
       }
     } else {
@@ -291,7 +292,7 @@ export class BotBrain {
     const prefer = this.minds.get(bot.id)?.enemy ?? 0;
     for (const o of game.players.values()) {
       if (o.id === bot.id || o.hp <= 0) continue;
-      if (game.match.mode === 'tdm' && o.team === bot.team) continue;
+      if (isTeamMode(game.match.mode) && o.team === bot.team) continue;
       const to = eye(o);
       const d = dist(from, to);
       if (d > SIGHT) continue;
@@ -369,7 +370,7 @@ export class BotBrain {
       let best: { id: number; part: 'head' | 'body'; t: number } | null = null;
       for (const other of game.players.values()) {
         if (other.id === bot.id || other.hp <= 0) continue;
-        if (game.match.mode === 'tdm' && other.team === bot.team) continue;
+        if (isTeamMode(game.match.mode) && other.team === bot.team) continue;
         const hit = rayPlayer(o, dir, other.p, other.crouch, w.range);
         if (!hit) continue;
         if (worldT !== null && hit.t >= worldT - 1e-3) continue;

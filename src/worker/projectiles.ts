@@ -7,7 +7,7 @@ import {
   GRENADE, GRENADE_KINDS, GRENADES_PER_LIFE, PAINT, SMOKE, stepProjectile,
   throwVelocity, type GrenadeKind, type ProjState, type SmokeVolume,
 } from '../shared/projectiles';
-import type { ClientMsg, ServerMsg, Vec3 } from '../shared/protocol';
+import { isTeamMode, type ClientMsg, type ServerMsg, type Vec3 } from '../shared/protocol';
 
 type Out = Array<{ to: 'all' | number; msg: ServerMsg }>;
 
@@ -16,8 +16,8 @@ export interface NadeHost {
   players: Map<number, { id: number; p: Vec3; hp: number; team: 0 | 1; crouch: boolean }>;
   match: { mode: string; phase: string };
   smokes: SmokeVolume[];
-  /** The same damage path a validated shot uses (hp, hit, kill, score). */
-  applyDamage(fromId: number, toId: number, dmg: number, head: boolean, now: number): Out;
+  /** The same damage path a validated shot uses (hp, hit, mark-out, score); `nade` tags the mark for the feed. */
+  applyDamage(fromId: number, toId: number, dmg: number, head: boolean, now: number, w?: undefined, nade?: 'paint'): Out;
 }
 
 export interface Projectile extends ProjState { id: number; kind: GrenadeKind; owner: number; bornAt: number }
@@ -101,7 +101,7 @@ export class Projectiles {
     const hit: number[] = [];
     for (const t of host.players.values()) {
       if (t.hp <= 0) continue;
-      if (host.match.mode === 'tdm' && thrower && t.team === thrower.team) continue;
+      if (isTeamMode(host.match.mode) && thrower && t.team === thrower.team) continue;
       const h = t.crouch ? PLAYER.crouchHeight : PLAYER.height;
       // nearest point of the player's box
       const r = PLAYER.radius;
@@ -122,7 +122,7 @@ export class Projectiles {
     const marked = host.match.phase === 'over' ? [] : this.marks(host, pr.owner, at);
     const out: Out = [{ to: 'all', msg: { t: 'burst', id: pr.id, kind: pr.kind, p: at, owner: pr.owner, marked } }];
     // a thrower who left the room cannot score; the paint still lands
-    if (host.players.has(pr.owner)) for (const id of marked) out.push(...host.applyDamage(pr.owner, id, PAINT.damage, false, now));
+    if (host.players.has(pr.owner)) for (const id of marked) out.push(...host.applyDamage(pr.owner, id, PAINT.damage, false, now, undefined, 'paint'));
     return out;
   }
 }

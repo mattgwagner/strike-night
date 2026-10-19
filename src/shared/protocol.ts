@@ -4,7 +4,10 @@ import type { GrenadeKind } from './projectiles';
 
 export type Vec3 = [number, number, number];
 export type Team = 0 | 1;           // 0 = Night, 1 = Day (used by team modes)
-export type GameMode = 'ffa' | 'tdm';
+export type GameMode = 'ffa' | 'tdm' | 'elim';
+export const GAME_MODES: GameMode[] = ['ffa', 'tdm', 'elim'];
+/** Modes with two sides (no friendly fire, team spawns). */
+export const isTeamMode = (m: GameMode | string) => m === 'tdm' || m === 'elim';
 export type MatchPhase = 'warmup' | 'live' | 'over';
 
 export interface PlayerSnapshot {
@@ -15,7 +18,7 @@ export interface PlayerSnapshot {
   p: Vec3;            // feet position
   yaw: number;
   pitch: number;
-  hp: number;         // 0 = dead
+  hp: number;         // hits left; 0 = marked out
   w: WeaponId;        // held weapon
   crouch: boolean;
   moving: boolean;
@@ -30,7 +33,16 @@ export interface MatchInfo {
   mode: GameMode;
   phase: MatchPhase;
   endsAt: number;       // server ms when the phase ends
-  teamScore: [number, number];
+  teamScore: [number, number];   // tdm: team marks; elim: rounds won
+  /** Elimination round state (only while mode is 'elim' and phase is 'live'). endsAt is the end of the current stage. */
+  round?: RoundInfo;
+}
+
+export interface RoundInfo {
+  n: number;                                 // 1-based round number
+  stage: 'freeze' | 'live' | 'over';         // freeze: move, no shooting; over: banner before the next round
+  winner?: Team | -1;                        // set in 'over'; -1 = draw (both sides out together)
+  why?: 'wipe' | 'time';
 }
 
 export interface HitReport { id: number; part: 'head' | 'body'; point: Vec3 }
@@ -56,7 +68,7 @@ export type ServerMsg =
   | { t: 'spawn'; id: number; p: Vec3; yaw: number; hp: number; w: WeaponId }
   | { t: 'shot'; id: number; w: WeaponId; o: Vec3; d: Vec3; hit?: Vec3 }
   | { t: 'hit'; from: number; to: number; dmg: number; part: 'head' | 'body'; hp: number }
-  | { t: 'kill'; killer: number; victim: number; w: WeaponId; headshot: boolean }
+  | { t: 'kill'; killer: number; victim: number; w: WeaponId; headshot: boolean; nade?: 'paint' }
   | { t: 'score'; players: Array<Pick<PlayerSnapshot, 'id' | 'kills' | 'deaths' | 'ping' | 'team'>>; match: MatchInfo }
   | { t: 'match'; match: MatchInfo }
   | { t: 'chat'; from: number; name: string; text: string }

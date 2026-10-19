@@ -8,7 +8,11 @@
 import * as THREE from 'three';
 import { CHARACTERS, PLAYER } from '../../shared/constants';
 
-export interface SkinRig { group: THREE.Group; head: THREE.Object3D; gun: THREE.Object3D; setCrouch(c: boolean): void }
+export interface SkinRig {
+  group: THREE.Group; head: THREE.Object3D; gun: THREE.Object3D; setCrouch(c: boolean): void;
+  /** Paint splat on the chest and back in the marker's colour; null clears it (on respawn). */
+  mark(color: THREE.ColorRepresentation | null): void;
+}
 
 const R = PLAYER.radius;
 const HEAD_Y = PLAYER.height - PLAYER.headHeight; // 1.5: head pivot; head parts live in [0, 0.3] above it
@@ -70,9 +74,17 @@ export function buildSkin(skinId: string, team: 0 | 1 = 0): SkinRig {
   head.position.y = HEAD_Y;
   const gun = new THREE.Group();
   gun.position.set(R * 0.75, 1.22, 0.12);
-  const gunMesh = new THREE.Mesh(box(0.08, 0.1, 0.6), std(0x222222, 0.4, 0.6));
-  gunMesh.position.set(0, 0, 0.25);
-  gun.add(gunMesh);
+  // paintball marker: body, barrel, hopper on top, air tank at the back
+  const gunDark = std(0x23262e, 0.4, 0.5);
+  const gunBody = new THREE.Mesh(box(0.08, 0.1, 0.3), gunDark);
+  gunBody.position.set(0, 0, 0.12);
+  const gunBarrel = new THREE.Mesh(cyl(0.02, 0.02, 0.32, 8).rotateX(Math.PI / 2), gunDark);
+  gunBarrel.position.set(0, 0.02, 0.43);
+  const hopper = new THREE.Mesh(sph(0.08, 10, 8).scale(0.9, 0.8, 1.2), std(0xffd23b, 0.3, 0));
+  hopper.position.set(0, 0.12, 0.1);
+  const airTank = new THREE.Mesh(cyl(0.04, 0.04, 0.2, 8).rotateX(Math.PI / 2), std(0xb8bcc6, 0.25, 0.85));
+  airTank.position.set(0, -0.03, -0.1);
+  gun.add(gunBody, gunBarrel, hopper, airTank);
   inner.add(head, gun);
   const body = new Kit(), face = new Kit();
   const spinners: THREE.Object3D[] = [];
@@ -199,10 +211,53 @@ export function buildSkin(skinId: string, team: 0 | 1 = 0): SkinRig {
     const mesh = spin.children[0];
     mesh.onBeforeRender = () => { spin.rotation.z = (performance.now() / 1000) * 18; };
   }
+  // paint mark discs, hidden until this player is marked out (front faces +Z inside `inner`)
+  const markMat = new THREE.MeshBasicMaterial({ map: splatTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const marks: THREE.Mesh[] = [];
+  for (const [z, ry] of [[R + 0.02, 0], [-(R + 0.02), Math.PI]] as const) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), markMat);
+    m.position.set(0.03, 1.12, z);
+    m.rotation.set(0, ry, Math.random() * Math.PI * 2);
+    m.visible = false;
+    m.renderOrder = 2;
+    inner.add(m);
+    marks.push(m);
+  }
   return {
     group, head, gun,
     setCrouch(c) { const s = c ? PLAYER.crouchHeight / PLAYER.height : 1; group.scale.y = s; },
+    mark(c) {
+      if (c !== null) markMat.color.set(c);
+      for (const m of marks) m.visible = c !== null;
+    },
   };
+}
+
+let splatTex: THREE.Texture | null = null;
+/** White paint splat on transparent: a blob, droplets and a couple of runs. Tinted per use. */
+export function splatTexture(): THREE.Texture {
+  if (splatTex) return splatTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#fff'; g.strokeStyle = '#fff';
+  g.beginPath();
+  for (let i = 0; i <= 20; i++) {
+    const a = (i / 20) * Math.PI * 2, r = 30 + (i % 2 ? 6 : 0) + Math.sin(i * 2.3) * 4;
+    g.lineTo(64 + Math.cos(a) * r, 64 + Math.sin(a) * r);
+  }
+  g.closePath(); g.fill();
+  for (let i = 0; i < 12; i++) {
+    const a = i * 2.39996, d = 36 + (i * 7) % 22, r = 2.5 + (i * 5) % 7;
+    g.beginPath(); g.arc(64 + Math.cos(a) * d, 64 + Math.sin(a) * d, r, 0, Math.PI * 2); g.fill();
+  }
+  g.lineWidth = 7; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(52, 80); g.lineTo(50, 112); g.stroke();
+  g.lineWidth = 5;
+  g.beginPath(); g.moveTo(76, 84); g.lineTo(77, 104); g.stroke();
+  splatTex = new THREE.CanvasTexture(c);
+  splatTex.colorSpace = THREE.SRGBColorSpace;
+  return splatTex;
 }
 
 function merge(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {

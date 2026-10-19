@@ -61,13 +61,13 @@ describe('bots', () => {
     expect(g.humanCount()).toBe(0);
   });
 
-  it('kills a stationary target within 10 simulated seconds', () => {
+  it('marks out a stationary target within 10 simulated seconds', () => {
     const g = new Game('arcade', 0);
     const host = g.join('Target', 'astro', 0);
     if (!('player' in host)) throw new Error('join failed');
     g.setBots(1, 0);
     const bot = [...g.players.values()].find(p => p.bot)!;
-    bot.w = 'rifle';
+    bot.w = 'semi';
     bot.p = [-24, 0, 0];
     host.player.p = [-16, 0, 0];
     let killedAt = -1;

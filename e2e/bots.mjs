@@ -12,7 +12,7 @@ const errs = [];
 const p = await browser.newPage({ viewport: { width: 960, height: 600 } });
 p.on('console', m => { if (m.type() === 'error') errs.push(m.text().slice(0, 300)); });
 p.on('pageerror', e => errs.push(e.message));
-await p.goto(`${url}/?room=${room}&name=Solo&skin=astro&w=rifle`);
+await p.goto(`${url}/?room=${room}&name=Solo&skin=astro&w=semi`);
 await p.click('button.go');
 await p.waitForFunction(() => window.strike && window.strike.myId > 0, null, { timeout: 15000 });
 await p.evaluate(() => { window.strike.input.locked = true; window.strike.setPaused(false); window.strike.net.send({ t: 'admin', cmd: 'bots', arg: 2 }); });

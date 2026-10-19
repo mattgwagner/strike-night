@@ -2,7 +2,7 @@
 // steps projectiles with this at the 20 Hz tick, and the client runs the same
 // code for its preview arc, so what you aim is where it lands.
 // Pure functions on plain arrays only (shared by client and worker).
-import { PLAYER, TICK_MS, WEAPONS } from './constants';
+import { PLAYER, TICK_MS } from './constants';
 import type { MapBox } from './map';
 import type { Vec3 } from './protocol';
 
@@ -28,8 +28,8 @@ export const PAINT = {
   fuseMs: 2500,
   bounces: 3,            // bursts on this bounce if the fuse has not gone yet
   radius: 4,             // marks players within this distance with line of sight
-  /** One hit, same as a body shot from the rifle (tracks WEAPONS tuning). */
-  get damage() { return WEAPONS.rifle.damage; },
+  /** One hit, same as a body mark (PLAYER.maxHp = 3 hits). */
+  damage: 1,
 } as const;
 
 export const SMOKE = {

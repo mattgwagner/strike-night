@@ -107,7 +107,16 @@ export class Grenades {
     this.pushHud();
   }
 
-  private canAct() { const g = this.game; return g.input.locked && !g.hud.chatOpen && g.me.alive && g.myId >= 0; }
+  private canAct() { const g = this.game; return g.input.locked && !g.hud.chatOpen && g.me.alive && g.myId >= 0 && !g.frozen; }
+
+  /** Distance and stereo pan from the listener to a world point, for grenade sounds. */
+  private ear(p: Vec3): [number, number] {
+    const g = this.game, e = g.me.eye();
+    const dx = p[0] - e[0], dz = p[2] - e[2];
+    const d = Math.hypot(dx, p[1] - e[1], dz);
+    const pan = Math.max(-1, Math.min(1, (dx * Math.cos(g.me.yaw) - dz * Math.sin(g.me.yaw)) / (Math.hypot(dx, dz) || 1)));
+    return [d, pan];
+  }
 
   press(kind: GrenadeKind) {
     if (!this.canAct() || this.left[kind] <= 0 || this.holding) return;
@@ -125,6 +134,7 @@ export class Grenades {
     this.left[h.kind]--;
     this.pushHud();
     g.net.send({ t: 'throw', kind: h.kind, o: g.me.eye(), d: forward(g.me.yaw, g.me.pitch), power });
+    g.sfx.nadeThrow();
   }
 
   cancel() { this.holding = null; this.preview.visible = false; this.landMark.visible = false; }
@@ -156,13 +166,26 @@ export class Grenades {
           this.game.scene.add(mesh);
           f = { id: m.id, kind: m.kind, owner: m.owner, mesh, buf: [] };
           this.flying.set(m.id, f);
+          if (m.owner !== this.game.myId) this.game.sfx.nadeThrow(...this.ear(m.p));
+        } else {
+          // a bounce: the velocity changed more than one tick of gravity explains
+          const last = f.buf[f.buf.length - 1];
+          const ex: Vec3 = [last.v[0], last.v[1] - GRENADE.gravity * GRENADE.dt, last.v[2]];
+          if (Math.hypot(m.v[0] - ex[0], m.v[1] - ex[1], m.v[2] - ex[2]) > 2) this.game.sfx.nadeBounce(...this.ear(m.p));
         }
         f.buf.push({ t: m.now ?? this.game.net.serverNow(), p: m.p, v: m.v });
         if (f.buf.length > 12) f.buf.shift();
         break;
       }
-      case 'burst': this.drop(m.id); this.burst(m.p, this.colorOf(m.owner, 'paint')); break;
-      case 'smoke': this.drop(m.id); this.smoke.add(m.id, m.p, m.until, this.game.net.serverNow()); break;
+      case 'burst': this.drop(m.id); this.burst(m.p, this.colorOf(m.owner, 'paint')); this.game.sfx.paintBurst(...this.ear(m.p)); break;
+      case 'smoke': {
+        this.drop(m.id);
+        // born from `until` so a cloud sent to a mid-match joiner shows at its real age, not refilling from zero
+        const born = m.until - SMOKE.durationMs;
+        if (this.game.net.serverNow() - born < 1500) this.game.sfx.smokeHiss(...this.ear(m.p));
+        this.smoke.add(m.id, m.p, m.until, born);
+        break;
+      }
     }
   }
 

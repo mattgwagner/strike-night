@@ -2,7 +2,7 @@
 // over the first second and fade over the last two. Dense enough that you
 // cannot see through the middle, and a grey screen veil when you are inside.
 import * as THREE from 'three';
-import { SMOKE } from '../../shared/projectiles';
+import { SMOKE, type SmokeVolume } from '../../shared/projectiles';
 import type { Vec3 } from '../../shared/protocol';
 
 const PUFFS = 40;
@@ -81,6 +81,13 @@ export class SmokeField {
   }
 
   get count() { return this.clouds.size; }
+
+  /** Active clouds as the shared smoke volumes (client-side smokeBlocks checks). */
+  volumes(): SmokeVolume[] {
+    const out: SmokeVolume[] = [];
+    for (const c of this.clouds.values()) out.push({ id: c.id, p: c.p, until: c.until });
+    return out;
+  }
 
   /** Opacity 0..1 of a cloud at server time `now`. */
   private alpha(c: Cloud, now: number) {

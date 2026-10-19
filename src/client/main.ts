@@ -48,7 +48,7 @@ async function boot() {
   if (saved.fov) game.baseFov = clamp(saved.fov, 70, 110);
   if (typeof saved.volume === 'number') game.sfx.setVolume(clamp(saved.volume, 0, 1));
   if (saved.ambient === false) game.sfx.setAmbient(false);
-  game.hud.onHp = hp => game.sfx.setLowHealth(hp > 0 && hp <= 30);
+  game.hud.onHp = hp => game.sfx.setLowHealth(hp === 1);
   mountPause(game);
 }
 
@@ -67,7 +67,7 @@ function mountPause(game: Game) {
         <label>Volume <b class="vol-n"></b><input class="vol" type="range" min="0" max="1" step="0.05" value="${vol}" /></label>
         <label class="check"><input class="ambient" type="checkbox" ${game.sfx.ambient ? 'checked' : ''} /> Ambient hum</label>
         <div class="bots"><span>Bots</span><button type="button" class="alt bots-dec" aria-label="Fewer bots">−</button><b class="bots-n">0</b><button type="button" class="alt bots-inc" aria-label="More bots">+</button></div>
-        <label class="mode">Mode <select><option value="ffa">Deathmatch</option><option value="tdm">Team deathmatch</option></select></label>
+        <label class="mode">Mode <select><option value="ffa">Free-for-all</option><option value="tdm">Team paintball</option><option value="elim">Elimination (rounds)</option></select></label>
         <button type="button" class="alt restart">RESTART MATCH</button>
       </div>
       <ul class="cheatsheet">
@@ -75,13 +75,14 @@ function mountPause(game: Game) {
         <li><kbd>Mouse</kbd> Aim</li>
         <li><kbd>Click</kbd> Shoot</li>
         <li><kbd>R</kbd> Reload</li>
-        <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> Weapons</li>
-        <li><kbd>Q</kbd> Swap weapon</li>
+        <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> Marker · sidearm · tag</li>
+        <li><kbd>Q</kbd> Swap marker</li>
+        <li><kbd>G</kbd> Paint grenade · <kbd>F</kbd> Smoke</li>
         <li><kbd>Space</kbd> Jump</li>
         <li><kbd>Ctrl</kbd> Crouch</li>
         <li><kbd>Tab</kbd> Scores</li>
         <li><kbd>Enter</kbd> Chat</li>
-        <li><kbd>Right click</kbd> Scope</li>
+        <li><kbd>Right click</kbd> Scope (pump)</li>
         <li><kbd>Esc</kbd> Pause</li>
       </ul>
     </div>
@@ -98,7 +99,11 @@ function mountPause(game: Game) {
   const botsN = pause.querySelector('.bots-n') as HTMLElement;
   const sel = pause.querySelector('select') as HTMLSelectElement;
   const ambient = pause.querySelector('.ambient') as HTMLInputElement;
-  let bots = 0;
+  // read the bot count back from the room: the server is the truth, not what this menu last asked for
+  const countBots = () => [...game.remotes.values()].filter(r => r.bot).length;
+  let bots = countBots();
+  const paintBots = () => { bots = countBots(); botsN.textContent = String(bots); };
+  game.onRoster = paintBots;
   const paintSens = () => { sensN.textContent = `${(game.input.sensitivity / 0.0022).toFixed(1)}×`; };
   const paintFov = () => { fovN.textContent = String(Math.round(game.baseFov)); };
   const paintVol = () => { volN.textContent = `${Math.round(game.sfx.volume * 100)}`; };
@@ -139,6 +144,7 @@ function mountPause(game: Game) {
     pause.classList.toggle('show', p);
     game.hud.root.classList.toggle('away', p);
     sel.value = game.match.mode;
+    paintBots();
     fovInput.value = String(Math.round(game.baseFov));
     paintFov();
   };
