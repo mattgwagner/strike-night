@@ -56,7 +56,7 @@ export type ClientMsg =
   | { t: 'chat'; text: string }
   | { t: 'ping'; c: number; rtt: number }
   | { t: 'loadout'; primary: WeaponId }
-  | { t: 'admin'; cmd: 'mode' | 'restart' | 'bots'; arg?: string | number }
+  | { t: 'admin'; cmd: 'mode' | 'restart' | 'bots' | 'botdiff'; arg?: string | number }
   // grenades: o = eye, d = unit view direction, power 0..1 (hold time)
   | { t: 'throw'; kind: GrenadeKind; o: Vec3; d: Vec3; power: number };
 

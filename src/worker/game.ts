@@ -206,6 +206,7 @@ export class Game {
     }
     if (msg.cmd === 'restart') return this.startWarmup(now);
     if (msg.cmd === 'bots') return this.setBots(Number(msg.arg), now);
+    if (msg.cmd === 'botdiff' && (msg.arg === 'easy' || msg.arg === 'normal' || msg.arg === 'hard')) { this.setBotDifficulty(msg.arg); return []; }
     return [];
   }
 

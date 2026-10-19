@@ -61,11 +61,33 @@ describe('bots', () => {
     expect(g.humanCount()).toBe(0);
   });
 
-  it('marks out a stationary target within 10 simulated seconds', () => {
+  it('easy bots are beatable: a stationary target 8 m away survives 2.5 s minimum and ~7 s on average', () => {
+    // Family playtest 2026-10-19: the old table killed everyone. Easy must give a kid time to react.
+    const survived: number[] = [];
+    for (let run = 0; run < 8; run++) {
+      const g = new Game('arcade', 0);
+      const host = g.join('Target', 'astro', 0);
+      if (!('player' in host)) throw new Error('join failed');
+      g.setBots(1, 0);
+      const bot = [...g.players.values()].find(p => p.bot)!;
+      bot.w = 'auto';
+      bot.p = [-24, 0, 0];
+      host.player.p = [-16, 0, 0];
+      let killedAt = 30_000;
+      for (let i = 1; i <= 600; i++) { g.tick(i * 50); if (host.player.hp <= 0) { killedAt = i * 50; break; } }
+      survived.push(killedAt);
+    }
+    // 3 body marks at 850 ms cadence after a 1.1 s reaction: the floor is structural (2.8 s), the mean is the tuning.
+    expect(Math.min(...survived)).toBeGreaterThanOrEqual(2_500);
+    expect(survived.reduce((a, b) => a + b, 0) / survived.length).toBeGreaterThanOrEqual(7_000);
+  });
+
+  it('hard bots mark out a stationary target within 10 simulated seconds', () => {
     const g = new Game('arcade', 0);
     const host = g.join('Target', 'astro', 0);
     if (!('player' in host)) throw new Error('join failed');
     g.setBots(1, 0);
+    g.setBotDifficulty('hard');
     const bot = [...g.players.values()].find(p => p.bot)!;
     bot.w = 'semi';
     bot.p = [-24, 0, 0];

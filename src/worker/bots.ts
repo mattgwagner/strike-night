@@ -12,15 +12,19 @@ export type BotDifficulty = 'easy' | 'normal' | 'hard';
 
 export const BOT_NAMES = ['Night Guard', 'Umpire', 'Spinner', 'Mascot', 'Rookie', 'Closer'] as const;
 
-const SIGHT = 45;
 const STEP_UP = 0.55;
 const DROP = 3;
 
-const DIFF: Record<BotDifficulty, { reactionMs: number; aim: number; aimMin: number; shrink: number }> = {
-  easy:   { reactionMs: 520, aim: 0.12,  aimMin: 0.04,  shrink: 0.94 },
-  normal: { reactionMs: 280, aim: 0.055, aimMin: 0.012, shrink: 0.90 },
-  hard:   { reactionMs: 120, aim: 0.025, aimMin: 0.004, shrink: 0.85 },
+// Tuned 2026-10-19 after the family playtest: the first table let bots settle to
+// a 0.012 rad fixed offset within a second and fire at the weapon's full rate,
+// which nobody could beat. Aim error is now per-shot noise that shrinks slowly
+// (per tick at 20 Hz), fire cadence is capped, and sight range is per level.
+const DIFF: Record<BotDifficulty, { reactionMs: number; aim: number; aimMin: number; shrink: number; cadenceMs: number; sight: number }> = {
+  easy:   { reactionMs: 1100, aim: 0.24, aimMin: 0.14,  shrink: 0.995, cadenceMs: 850, sight: 24 },
+  normal: { reactionMs: 550, aim: 0.14,  aimMin: 0.07,  shrink: 0.99,  cadenceMs: 500, sight: 32 },
+  hard:   { reactionMs: 220, aim: 0.05,  aimMin: 0.02,  shrink: 0.98,  cadenceMs: 200, sight: 45 },
 };
+export const DEFAULT_BOT_DIFFICULTY: BotDifficulty = 'easy';
 
 interface Cell { x: number; y: number; z: number; n: number[] }
 
@@ -185,7 +189,7 @@ function eye(p: ServerPlayer): Vec3 {
  * `tick` runs inside Game.tick, before the state broadcast.
  */
 export class BotBrain {
-  difficulty: BotDifficulty = 'normal';
+  difficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY;
   private grid: NavGrid | null = null;
   private minds = new Map<number, Mind>();
 
@@ -254,6 +258,9 @@ export class BotBrain {
       const len = Math.hypot(dx, dy, dz) || 1;
       const pitch0 = Math.asin(Math.max(-1, Math.min(1, dy / len)));
       const yaw0 = Math.atan2(-dx, -dz);
+      // Re-roll the error every tick so misses are noise, not a fixed offset the bot "learns" away.
+      m.aimYaw = Math.random() * 2 - 1;
+      m.aimPitch = (Math.random() * 2 - 1) * 0.55;
       bot.yaw = yaw0 + m.aimYaw * m.aim;
       bot.pitch = Math.max(-1.15, Math.min(1.15, pitch0 + m.aimPitch * m.aim));
       if (now >= m.strafeUntil) {
@@ -273,7 +280,7 @@ export class BotBrain {
         wish = [rx * m.strafe * speed * 0.45, rz * m.strafe * speed * 0.45];
       }
       const wpn = WEAPONS[bot.w];
-      if (wpn && game.canAttack() && now - m.seen >= diff.reactionMs && now - bot.lastShot >= wpn.fireMs) {
+      if (wpn && game.canAttack() && now - m.seen >= diff.reactionMs && now - bot.lastShot >= Math.max(wpn.fireMs, diff.cadenceMs)) {
         out.push(...this.fire(game, grid, bot, now));
       }
     } else {
@@ -288,6 +295,7 @@ export class BotBrain {
   private visibleEnemy(game: Game, grid: NavGrid, bot: ServerPlayer): ServerPlayer | null {
     const from = eye(bot);
     let best: ServerPlayer | null = null;
+    const SIGHT = DIFF[this.difficulty].sight;
     let bestD = SIGHT;
     const prefer = this.minds.get(bot.id)?.enemy ?? 0;
     for (const o of game.players.values()) {
@@ -374,7 +382,9 @@ export class BotBrain {
         const hit = rayPlayer(o, dir, other.p, other.crouch, w.range);
         if (!hit) continue;
         if (worldT !== null && hit.t >= worldT - 1e-3) continue;
-        if (!best || hit.t < best.t) best = { id: other.id, part: hit.part, t: hit.t };
+        // Only hard bots get headshots; a lucky head mark one-taps a kid.
+        const part = this.difficulty === 'hard' ? hit.part : 'body';
+        if (!best || hit.t < best.t) best = { id: other.id, part, t: hit.t };
       }
       if (!best) continue;
       const point: Vec3 = [o[0] + dir[0] * best.t, o[1] + dir[1] * best.t, o[2] + dir[2] * best.t];
