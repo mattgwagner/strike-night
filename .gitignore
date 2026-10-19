@@ -4,7 +4,3 @@ dist
 .dev.vars
 *.log
 .DS_Store
-e2e/out
-e2e/out-fx
-e2e/out-nades
-e2e/out-ui
