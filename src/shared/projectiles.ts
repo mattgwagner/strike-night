@@ -110,7 +110,7 @@ function resolveSphereBox(s: ProjState, r: number, b: MapBox): Vec3 | null {
  * returns `s`. Substeps internally so the result is independent of frame rate
  * for a fixed dt.
  */
-export function stepProjectile(s: ProjState, dt: number, boxes: MapBox[]): ProjState {
+export function stepProjectile(s: ProjState, dt: number, boxes: MapBox[], half = Infinity): ProjState {
   const r = GRENADE.radius;
   const speed = Math.hypot(s.v[0], s.v[1], s.v[2]);
   const n = Math.max(1, Math.ceil((speed * dt) / GRENADE.maxStep));
@@ -138,6 +138,18 @@ export function stepProjectile(s: ProjState, dt: number, boxes: MapBox[]): ProjS
       if (hard) bounced = true;
       if (nrm[1] > 0.7) s.landed = true;
     }
+    // the outer walls go up forever for grenades: nothing leaves the map
+    for (const ax of [0, 2] as const) {
+      const lim = half - r;
+      if (Math.abs(s.p[ax]) > lim) {
+        const sign = Math.sign(s.p[ax]);
+        s.p[ax] = sign * lim;
+        if (s.v[ax] * sign > 0) {
+          if (s.v[ax] * sign > GRENADE.bounceSpeed) bounced = true;
+          s.v[ax] = -s.v[ax] * GRENADE.restitution;
+        }
+      }
+    }
     if (bounced) s.bounces++;
     // world floor safety net
     if (s.p[1] < -5) { s.p[1] = -5; s.v = [0, 0, 0]; s.landed = true; }
@@ -151,12 +163,12 @@ export interface ArcResult { points: Vec3[]; end: Vec3; landedAt: number | null;
  * Simulate a throw with the server's tick and return a sample per tick until
  * `maxMs` or (for smoke) landing — what the preview arc draws.
  */
-export function simulateArc(o: Vec3, d: Vec3, power: number, boxes: MapBox[], kind: GrenadeKind, maxMs: number = PAINT.fuseMs): ArcResult {
+export function simulateArc(o: Vec3, d: Vec3, power: number, boxes: MapBox[], kind: GrenadeKind, maxMs: number = PAINT.fuseMs, half = Infinity): ArcResult {
   const s: ProjState = { p: [o[0], o[1], o[2]], v: throwVelocity(d, power), bounces: 0, landed: false };
   const points: Vec3[] = [[...s.p] as Vec3];
   let landedAt: number | null = null;
   for (let t = 0; t < maxMs; t += TICK_MS) {
-    stepProjectile(s, GRENADE.dt, boxes);
+    stepProjectile(s, GRENADE.dt, boxes, half);
     points.push([s.p[0], s.p[1], s.p[2]]);
     if (s.landed && landedAt === null) landedAt = t + TICK_MS;
     if (kind === 'smoke' && s.landed) break;

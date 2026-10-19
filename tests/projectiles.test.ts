@@ -77,6 +77,13 @@ describe('grenade arc', () => {
     expect(s.p[0]).toBeLessThan(2);
   });
 
+  it('cannot leave the map over the outer wall', () => {
+    const s: ProjState = { p: [8, 1.5, 0], v: [14, 6, 0], bounces: 0, landed: false };
+    for (let i = 0; i < 60; i++) stepProjectile(s, GRENADE.dt, [floor], 10);
+    expect(s.p[0]).toBeLessThanOrEqual(10 - GRENADE.radius);
+    expect(s.p[1]).toBeGreaterThan(0);
+  });
+
   it('segment-sphere test', () => {
     expect(segmentHitsSphere([-10, 1, 0], [10, 1, 0], [0, 0, 0], 5)).toBe(true);
     expect(segmentHitsSphere([-10, 6, 0], [10, 6, 0], [0, 0, 0], 5)).toBe(false);

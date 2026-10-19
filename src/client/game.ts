@@ -17,6 +17,7 @@ import { buildWorld } from './world/build';
 import { buildViewmodel, type Viewmodel } from './world/viewmodel';
 import { Fx } from './world/fx';
 import { buildSkin, type SkinRig } from './world/skins';
+import { Grenades } from './engine/grenades';
 
 const INTERP_MS = 100;
 
@@ -42,6 +43,7 @@ export class Game {
   world;
   viewmodel: Viewmodel;
   fx: Fx;
+  grenades: Grenades;
   private bullets: MapBox[];
   private skin: string;
   // camera feel
@@ -90,6 +92,7 @@ export class Game {
     this.net.on(m => this.onMsg(m));
     this.net.connect(choice.name, choice.skin);
     this.names.set(-1, choice.name);
+    this.grenades = new Grenades(this, choice.skin);
     this.input.onKey = (code, down) => this.onKey(code, down);
     this.input.onLockChange = locked => { if (!locked && !this.hud.chatOpen) this.setPaused(true); };
     this.renderer.domElement.addEventListener('click', () => { if (!this.input.locked) this.resume(); });
@@ -426,6 +429,7 @@ export class Game {
     if (Math.abs(this.camera.fov - targetFov) > 0.05) { this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * (this.weapons.fovPunch > 0.5 ? 30 : 14)); this.camera.updateProjectionMatrix(); }
     const pxPerRad = innerHeight / 2 / Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
     this.fx.update(dt, pxPerRad);
+    this.grenades.update(dt);
     this.viewmodel.update(dt, this.me.moving ? this.me.speedFrac : 0, this.me.bobPhase, this.weapons.reloading, this.weapons.scoped, this.me.alive);
     this.world.tick(dt, t / 1000);
     // hud

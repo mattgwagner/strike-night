@@ -201,6 +201,20 @@ export class Hud {
     void this.streak.offsetWidth;
     this.streak.classList.add('show');
   }
+
+  // ----- grenades workstream addition -----
+  private nadeEl: HTMLElement | null = null;
+  /** Grenades left this life, shown under the ammo: G paint, F smoke. */
+  setGrenades(paint: number, smoke: number) {
+    if (!this.nadeEl) {
+      this.nadeEl = el('div', 'nades');
+      this.nadeEl.style.cssText = 'font-size:13px;letter-spacing:0.08em;margin-top:4px;opacity:0.9;display:flex;gap:12px;justify-content:flex-end';
+      (this.root.querySelector('.bottom-right') ?? this.root).appendChild(this.nadeEl);
+    }
+    const chip = (key: string, label: string, n: number, color: string) =>
+      `<span style="opacity:${n > 0 ? 1 : 0.35}"><b style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${color};margin-right:5px;vertical-align:0"></b>${label} ${n} <small style="opacity:0.6">[${key}]</small></span>`;
+    this.nadeEl.innerHTML = chip('G', 'PAINT', paint, '#ff3bd5') + chip('F', 'SMOKE', smoke, '#9a9ca2');
+  }
 }
 
 function weaponIcon(w: WeaponId): string {

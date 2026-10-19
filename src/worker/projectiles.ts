@@ -28,10 +28,12 @@ export class Projectiles {
   private nextId = 1;
   private solids;
   private blockers;
+  private half: number;
 
   constructor(map: MapData) {
     this.solids = solidBoxes(map.boxes);
     this.blockers = bulletBoxes(map.boxes);
+    this.half = map.half;
   }
 
   /** What a player has left this life. */
@@ -75,7 +77,7 @@ export class Projectiles {
     if (host.smokes.length) host.smokes.splice(0, host.smokes.length, ...host.smokes.filter(s => s.until > now));
     const still: Projectile[] = [];
     for (const pr of this.flying) {
-      stepProjectile(pr, GRENADE.dt, this.solids);
+      stepProjectile(pr, GRENADE.dt, this.solids, this.half);
       const age = now - pr.bornAt;
       if (pr.kind === 'paint' && (age >= PAINT.fuseMs || pr.bounces >= PAINT.bounces || age >= GRENADE.lifeMs)) {
         out.push(...this.burst(host, pr, now));
