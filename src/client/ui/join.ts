@@ -240,7 +240,6 @@ function mountPreview(canvas: HTMLCanvasElement, getSkin: () => string): () => v
     ring.geometry.dispose();
     (ring.material as THREE.Material).dispose();
     renderer.dispose();
-    renderer.forceContextLoss();
   };
 }
 
