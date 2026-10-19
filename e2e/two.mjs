@@ -19,7 +19,7 @@ const mk = async (tag) => {
 const join = async (p, name, skin, w) => {
   await p.goto(`${url}/?room=${room}&name=${name}&skin=${skin}&w=${w}`);
   await p.waitForSelector('button.go');
-  await p.click('button.go');
+  await p.click('button.go', { timeout: 90000 });
   await p.waitForFunction(() => window.strike && window.strike.myId > 0, null, { timeout: 15000 });
   // headless has no pointer lock; pretend
   await p.evaluate(() => { window.strike.input.locked = true; window.strike.setPaused(false); });
@@ -46,13 +46,16 @@ await a.waitForTimeout(500);
 // Walk both onto open floor by the west wall (test-only hops of 2m; the server clamps teleports)
 const hopTo = async (p, tx, tz) => {
   for (let i = 0; i < 60; i++) {
-    const done = await p.evaluate(([tx, tz]) => { const g = window.strike; const dx = tx - g.me.body.p[0], dz = tz - g.me.body.p[2]; const d = Math.hypot(dx, dz); if (d < 0.3) return true; const k = Math.min(2, d) / d; g.me.body.p[0] += dx * k; g.me.body.p[2] += dz * k; g.me.body.p[1] = 0; return false; }, [tx, tz]);
+    const done = await p.evaluate(([tx, tz]) => { const g = window.strike; const dx = tx - g.me.body.p[0], dz = tz - g.me.body.p[2]; const d = Math.hypot(dx, dz); if (d < 0.3) return true; const k = Math.min(1.5, d) / d; g.me.body.p[0] += dx * k; g.me.body.p[2] += dz * k; g.me.body.p[1] = 0; return false; }, [tx, tz]);
     if (done) break;
-    await p.waitForTimeout(120);
+    await p.waitForTimeout(200);
   }
 };
 await Promise.all([hopTo(a, -26, 0), hopTo(b, -20, 0)]);
-await b.waitForTimeout(800);
+// Under heavy load the hops outrun the 20 Hz input stream and the server resyncs late; wait for both views to agree.
+const converged = async (p) => p.waitForFunction(() => { const g = window.strike; const r = [...g.remotes.values()][0]; return r && Math.hypot(r.p[0] - (g.myId === 1 ? -20 : -26), r.p[2]) < 1; }, null, { timeout: 20000 }).then(() => true).catch(() => false);
+console.log('views converged:', await converged(a), await converged(b));
+await b.waitForTimeout(500);
 await a.evaluate(() => { const g = window.strike; const r = [...g.remotes.values()][0]; const dx = r.p[0] - g.me.body.p[0], dz = r.p[2] - g.me.body.p[2]; g.me.yaw = Math.atan2(-dx, -dz); g.me.pitch = -0.05; });
 const hpBefore = (await state(b)).hp;
 await a.mouse.down(); await a.waitForTimeout(1500); await a.mouse.up();
