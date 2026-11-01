@@ -278,20 +278,3 @@ function merge(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
   geo.setIndex(idx);
   return geo;
 }
-
-export function makeNameTag(name: string, color: string): THREE.Sprite {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256; canvas.height = 64;
-  const ctx = canvas.getContext('2d')!;
-  ctx.font = 'bold 36px system-ui, sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  const w = Math.min(250, ctx.measureText(name).width + 24);
-  ctx.beginPath(); ctx.roundRect(128 - w / 2, 8, w, 48, 10); ctx.fill();
-  ctx.fillStyle = color; ctx.fillText(name, 128, 33);
-  const tex = new THREE.CanvasTexture(canvas);
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: true, depthWrite: false, transparent: true }));
-  sprite.scale.set(1.6, 0.4, 1);
-  sprite.position.y = PLAYER.height + 0.3;
-  return sprite;
-}

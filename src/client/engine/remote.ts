@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { PLAYER, type WeaponId } from '../../shared/constants';
 import type { PlayerSnapshot, Vec3 } from '../../shared/protocol';
-import { buildSkin, makeNameTag, type SkinRig } from '../world/skins';
+import { buildSkin, type SkinRig } from '../world/skins';
 import { CHARACTERS } from '../../shared/constants';
 
 interface Sample { t: number; p: Vec3; yaw: number; pitch: number; crouch: boolean; moving: boolean }
@@ -15,7 +15,7 @@ export class RemotePlayer {
   id: number; name: string; skin: string; team: 0 | 1;
   hp: number; kills = 0; deaths = 0; ping = 0; w: WeaponId;
   bot: boolean;
-  rig: SkinRig; tag: THREE.Sprite;
+  rig: SkinRig;
   /** Skin colour: this player's paint (their shots, splats and the marks they leave). */
   color: string;
   // latest interpolated values
@@ -42,15 +42,13 @@ export class RemotePlayer {
     this.rig = buildSkin(s.skin, s.team);
     const def = CHARACTERS.find(c => c.id === s.skin) ?? CHARACTERS[0];
     this.color = def.color;
-    this.tag = makeNameTag(s.name, def.color);
-    this.rig.group.add(this.tag);
     this.rig.group.rotation.order = 'YXZ'; // yaw outermost so the death fall is in the body's own frame
     this.rig.group.position.set(s.p[0], s.p[1], s.p[2]);
     this.rig.group.visible = s.hp > 0;
     const seen = new Set<THREE.Material>();
     this.rig.group.traverse(o => {
       const m = (o as THREE.Mesh).material as THREE.Material | undefined;
-      if (!m || seen.has(m) || o === this.tag) return;
+      if (!m || seen.has(m)) return;
       seen.add(m);
       const em = (m as THREE.MeshStandardMaterial).emissive;
       this.mats.push({ m: m as any, emissive: em, base: em?.clone(), baseOpacity: (m as any).opacity ?? 1, baseTransparent: !!(m as any).transparent });
@@ -77,13 +75,12 @@ export class RemotePlayer {
     this.rig.group.visible = true;
     this.rig.group.scale.set(1, 1, 1);
     this.rig.mark(null);
-    this.tag.visible = true;
     this.setOpacity(1);
     this.spawnT = performance.now();
   }
 
   /** Marked out: a splat in the marker's colour, then they take a knee and fade. */
-  die(now: number, by?: THREE.ColorRepresentation) { this.hp = 0; this.deathT = now; this.tag.visible = false; if (by !== undefined) this.rig.mark(by); }
+  die(now: number, by?: THREE.ColorRepresentation) { this.hp = 0; this.deathT = now; if (by !== undefined) this.rig.mark(by); }
 
   /** Brief recoil of the body when hit. */
   flinch(head: boolean) { this.flinchT = performance.now(); this.flinchK = head ? 1 : 0.6; }
@@ -167,7 +164,6 @@ export class RemotePlayer {
 
   dispose(scene: THREE.Scene) {
     scene.remove(this.rig.group);
-    (this.tag.material as THREE.SpriteMaterial).map?.dispose();
   }
 
   private updateFlash(now: number) {
